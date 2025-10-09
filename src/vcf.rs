@@ -54,26 +54,44 @@ impl VcfIndex {
         variants
     }
 
-    pub fn query_by_position(&self, chromosome: &str, position: u64) -> Vec<VariantRecord> {
-        // Try both chromosome formats
-        for chr_variant in Self::get_chromosome_variants(chromosome) {
-            let results = query_indexed_region(&self.vcf_path, &self.index, &self.header, &chr_variant, position, position);
-            if !results.is_empty() {
-                return results;
-            }
-        }
-        Vec::new()
+    // Get list of chromosomes present in the VCF file
+    pub fn get_available_chromosomes(&self) -> Vec<String> {
+        self.header
+            .contigs()
+            .keys()
+            .map(|k| k.to_string())
+            .collect()
     }
 
-    pub fn query_by_region(&self, chromosome: &str, start: u64, end: u64) -> Vec<VariantRecord> {
-        // Try both chromosome formats
-        for chr_variant in Self::get_chromosome_variants(chromosome) {
-            let results = query_indexed_region(&self.vcf_path, &self.index, &self.header, &chr_variant, start, end);
-            if !results.is_empty() {
-                return results;
+    // Check if a chromosome (or its variant) exists in the header
+    fn find_matching_chromosome(&self, chromosome: &str) -> Option<String> {
+        let variants = Self::get_chromosome_variants(chromosome);
+        let available = self.get_available_chromosomes();
+
+        for variant in variants {
+            if available.contains(&variant) {
+                return Some(variant);
             }
         }
-        Vec::new()
+        None
+    }
+
+    pub fn query_by_position(&self, chromosome: &str, position: u64) -> (Vec<VariantRecord>, Option<String>) {
+        // Try to find the matching chromosome format
+        if let Some(matching_chr) = self.find_matching_chromosome(chromosome) {
+            let results = query_indexed_region(&self.vcf_path, &self.index, &self.header, &matching_chr, position, position);
+            return (results, Some(matching_chr));
+        }
+        (Vec::new(), None)
+    }
+
+    pub fn query_by_region(&self, chromosome: &str, start: u64, end: u64) -> (Vec<VariantRecord>, Option<String>) {
+        // Try to find the matching chromosome format
+        if let Some(matching_chr) = self.find_matching_chromosome(chromosome) {
+            let results = query_indexed_region(&self.vcf_path, &self.index, &self.header, &matching_chr, start, end);
+            return (results, Some(matching_chr));
+        }
+        (Vec::new(), None)
     }
 
     pub fn query_by_id(&self, id: &str) -> Vec<VariantRecord> {

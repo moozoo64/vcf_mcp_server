@@ -93,10 +93,37 @@ impl VcfServer {
         Parameters(QueryByPositionParams { chromosome, position }): Parameters<QueryByPositionParams>,
     ) -> Result<CallToolResult, McpError> {
         let index = self.index.lock().await;
-        let variants = index.query_by_position(&chromosome, position);
+        let (variants, matched_chr) = index.query_by_position(&chromosome, position);
 
         let content = if variants.is_empty() {
-            format!("No variants found at {}:{}", chromosome, position)
+            if matched_chr.is_some() {
+                // Chromosome was found but no variants at this position
+                format!("No variants found at {}:{}", chromosome, position)
+            } else {
+                // Chromosome name not recognized - provide helpful error
+                let available = index.get_available_chromosomes();
+                let sample_chroms: Vec<String> = available.iter().take(5).cloned().collect();
+
+                let alternate_suggestion = if chromosome.starts_with("chr") {
+                    chromosome.strip_prefix("chr").unwrap_or(&chromosome).to_string()
+                } else {
+                    format!("chr{}", chromosome)
+                };
+
+                if sample_chroms.is_empty() {
+                    format!("No variants found at {}:{}\n\nChromosome '{}' not found in VCF file (no chromosomes available).", chromosome, position, chromosome)
+                } else {
+                    let chr_format = if sample_chroms[0].starts_with("chr") { "chr-prefixed" } else { "numeric" };
+                    format!(
+                        "No variants found at {}:{}\n\nChromosome '{}' not found in VCF file. Available chromosomes include: {}\n\nNote: This file uses '{}' format. Try using '{}' instead of '{}'.",
+                        chromosome, position, chromosome,
+                        sample_chroms.join(", "),
+                        chr_format,
+                        alternate_suggestion,
+                        chromosome
+                    )
+                }
+            }
         } else {
             let variant_json: Vec<String> = variants.iter().map(format_variant).collect();
             format!(
@@ -115,13 +142,40 @@ impl VcfServer {
         Parameters(QueryByRegionParams { chromosome, start, end }): Parameters<QueryByRegionParams>,
     ) -> Result<CallToolResult, McpError> {
         let index = self.index.lock().await;
-        let variants = index.query_by_region(&chromosome, start, end);
+        let (variants, matched_chr) = index.query_by_region(&chromosome, start, end);
 
         let content = if variants.is_empty() {
-            format!(
-                "No variants found in region {}:{}-{}",
-                chromosome, start, end
-            )
+            if matched_chr.is_some() {
+                // Chromosome was found but no variants in this region
+                format!(
+                    "No variants found in region {}:{}-{}",
+                    chromosome, start, end
+                )
+            } else {
+                // Chromosome name not recognized - provide helpful error
+                let available = index.get_available_chromosomes();
+                let sample_chroms: Vec<String> = available.iter().take(5).cloned().collect();
+
+                let alternate_suggestion = if chromosome.starts_with("chr") {
+                    chromosome.strip_prefix("chr").unwrap_or(&chromosome).to_string()
+                } else {
+                    format!("chr{}", chromosome)
+                };
+
+                if sample_chroms.is_empty() {
+                    format!("No variants found in region {}:{}-{}\n\nChromosome '{}' not found in VCF file (no chromosomes available).", chromosome, start, end, chromosome)
+                } else {
+                    let chr_format = if sample_chroms[0].starts_with("chr") { "chr-prefixed" } else { "numeric" };
+                    format!(
+                        "No variants found in region {}:{}-{}\n\nChromosome '{}' not found in VCF file. Available chromosomes include: {}\n\nNote: This file uses '{}' format. Try using '{}' instead of '{}'.",
+                        chromosome, start, end, chromosome,
+                        sample_chroms.join(", "),
+                        chr_format,
+                        alternate_suggestion,
+                        chromosome
+                    )
+                }
+            }
         } else {
             let variant_json: Vec<String> = variants.iter().map(format_variant).collect();
             format!(
