@@ -46,6 +46,17 @@ impl VcfIndex {
         }
     }
 
+    // Helper to get alternate chromosome name
+    fn get_chromosome_variants(chromosome: &str) -> Vec<String> {
+        let mut variants = vec![chromosome.to_string()];
+        if chromosome.starts_with("chr") {
+            variants.push(chromosome[3..].to_string());
+        } else {
+            variants.push(format!("chr{}", chromosome));
+        }
+        variants
+    }
+
     fn add_variant(&mut self, variant: VariantRecord) {
         if let VcfIndex::InMemory { position_index, id_index, .. } = self {
             // Add to position index
@@ -76,20 +87,30 @@ impl VcfIndex {
     pub fn query_by_position(&self, chromosome: &str, position: u64) -> Vec<VariantRecord> {
         match self {
             VcfIndex::Indexed { vcf_path, index, header } => {
-                // Use tabix index to query region
-                query_indexed_region(vcf_path, index, header, chromosome, position, position)
+                // Try both chromosome formats
+                for chr_variant in Self::get_chromosome_variants(chromosome) {
+                    let results = query_indexed_region(vcf_path, index, header, &chr_variant, position, position);
+                    if !results.is_empty() {
+                        return results;
+                    }
+                }
+                Vec::new()
             }
             VcfIndex::InMemory { position_index, .. } => {
-                position_index
-                    .get(chromosome)
-                    .map(|variants| {
-                        variants
+                // Try both chromosome formats
+                for chr_variant in Self::get_chromosome_variants(chromosome) {
+                    if let Some(variants) = position_index.get(chr_variant.as_str()) {
+                        let results: Vec<VariantRecord> = variants
                             .iter()
                             .filter(|(pos, _)| *pos == position)
                             .map(|(_, variant)| variant.clone())
-                            .collect()
-                    })
-                    .unwrap_or_default()
+                            .collect();
+                        if !results.is_empty() {
+                            return results;
+                        }
+                    }
+                }
+                Vec::new()
             }
         }
     }
@@ -97,20 +118,30 @@ impl VcfIndex {
     pub fn query_by_region(&self, chromosome: &str, start: u64, end: u64) -> Vec<VariantRecord> {
         match self {
             VcfIndex::Indexed { vcf_path, index, header } => {
-                // Use tabix index to query region
-                query_indexed_region(vcf_path, index, header, chromosome, start, end)
+                // Try both chromosome formats
+                for chr_variant in Self::get_chromosome_variants(chromosome) {
+                    let results = query_indexed_region(vcf_path, index, header, &chr_variant, start, end);
+                    if !results.is_empty() {
+                        return results;
+                    }
+                }
+                Vec::new()
             }
             VcfIndex::InMemory { position_index, .. } => {
-                position_index
-                    .get(chromosome)
-                    .map(|variants| {
-                        variants
+                // Try both chromosome formats
+                for chr_variant in Self::get_chromosome_variants(chromosome) {
+                    if let Some(variants) = position_index.get(chr_variant.as_str()) {
+                        let results: Vec<VariantRecord> = variants
                             .iter()
                             .filter(|(pos, _)| *pos >= start && *pos <= end)
                             .map(|(_, variant)| variant.clone())
-                            .collect()
-                    })
-                    .unwrap_or_default()
+                            .collect();
+                        if !results.is_empty() {
+                            return results;
+                        }
+                    }
+                }
+                Vec::new()
             }
         }
     }
