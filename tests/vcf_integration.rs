@@ -77,11 +77,15 @@ fn test_format_variant_with_real_data() {
     let json = format_variant(&results[0]);
 
     // Verify JSON contains expected fields
-    assert!(json.contains(r#""chromosome": "20""#));
-    assert!(json.contains(r#""position": 14370"#));
-    assert!(json.contains(r#""id": "rs6054257""#));
-    assert!(json.contains(r#""reference": "G""#));
-    assert!(json.contains(r#""alternate": ["A"]"#));
+    assert!(json.contains(r#""chromosome":"20""#));
+    assert!(json.contains(r#""position":14370"#));
+    assert!(json.contains(r#""id":"rs6054257""#));
+    assert!(json.contains(r#""reference":"G""#));
+    assert!(json.contains(r#""alternate":["A"]"#));
+    // Filter is now an array
+    assert!(json.contains(r#""filter":"#));
+    // Info is now a structured object
+    assert!(json.contains(r#""info":"#));
 }
 
 #[test]

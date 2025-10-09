@@ -161,10 +161,13 @@ impl ServerHandler for VcfServer {
     fn get_info(&self) -> ServerInfo {
         ServerInfo {
             protocol_version: ProtocolVersion::V_2024_11_05,
-            capabilities: ServerCapabilities::builder().enable_tools().build(),
+            capabilities: ServerCapabilities::builder()
+                .enable_tools()
+                .enable_resources()
+                .build(),
             server_info: Implementation::from_build_env(),
             instructions: Some(
-                "This server provides VCF variant query tools: query_by_position, query_by_region, query_by_id".to_string()
+                "This server provides VCF variant query tools (query_by_position, query_by_region, query_by_id) and a metadata resource (vcf://metadata)".to_string()
             ),
         }
     }
@@ -175,17 +178,49 @@ impl ServerHandler for VcfServer {
         _: RequestContext<RoleServer>,
     ) -> Result<ListResourcesResult, McpError> {
         Ok(ListResourcesResult {
-            resources: vec![],
+            resources: vec![Annotated::new(
+                RawResource {
+                    uri: "vcf://metadata".to_string(),
+                    name: "VCF Metadata".to_string(),
+                    title: None,
+                    description: Some(
+                        "Metadata from the VCF file header including file format, contigs, and samples".to_string()
+                    ),
+                    mime_type: Some("application/json".to_string()),
+                    size: None,
+                    icons: None,
+                },
+                None
+            )],
             next_cursor: None,
         })
     }
 
     async fn read_resource(
         &self,
-        _request: ReadResourceRequestParam,
+        request: ReadResourceRequestParam,
         _: RequestContext<RoleServer>,
     ) -> Result<ReadResourceResult, McpError> {
-        Err(McpError::resource_not_found("No resources available", None))
+        if request.uri.as_str() == "vcf://metadata" {
+            let index = self.index.lock().await;
+            let metadata = index.get_metadata();
+            let metadata_json = serde_json::to_string_pretty(&metadata)
+                .map_err(|e| McpError::internal_error(format!("Failed to serialize metadata: {}", e), None))?;
+
+            Ok(ReadResourceResult {
+                contents: vec![ResourceContents::TextResourceContents {
+                    uri: request.uri.to_string(),
+                    mime_type: Some("application/json".to_string()),
+                    text: metadata_json,
+                    meta: None,
+                }],
+            })
+        } else {
+            Err(McpError::resource_not_found(
+                format!("Resource not found: {}", request.uri),
+                None
+            ))
+        }
     }
 
     async fn list_resource_templates(
