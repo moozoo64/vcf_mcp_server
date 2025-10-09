@@ -3,7 +3,6 @@ use noodles::core::{Position, Region};
 use noodles::tabix;
 use noodles::vcf;
 use noodles::vcf::variant::record::{AlternateBases, Filters, Ids};
-use std::collections::HashMap;
 use std::fs::File;
 use std::path::PathBuf;
 
@@ -20,146 +19,52 @@ pub struct VariantRecord {
     pub info: String,
 }
 
-// VCF index structure - supports both tabix-indexed and in-memory modes
+// VCF index structure - uses tabix index for efficient queries
 #[derive(Debug)]
-pub enum VcfIndex {
-    // Tabix-indexed mode: uses .tbi file for efficient region queries
-    Indexed {
-        vcf_path: PathBuf,
-        index: tabix::Index,
-        header: vcf::Header,
-    },
-    // In-memory mode: loads all variants into memory
-    InMemory {
-        position_index: HashMap<String, Vec<(u64, VariantRecord)>>,
-        id_index: HashMap<String, Vec<VariantRecord>>,
-        header: vcf::Header,
-    },
+pub struct VcfIndex {
+    vcf_path: PathBuf,
+    index: tabix::Index,
+    header: vcf::Header,
 }
 
 impl VcfIndex {
-    fn new_in_memory() -> Self {
-        VcfIndex::InMemory {
-            position_index: HashMap::new(),
-            id_index: HashMap::new(),
-            header: vcf::Header::default(),
-        }
-    }
-
     // Helper to get alternate chromosome name
     fn get_chromosome_variants(chromosome: &str) -> Vec<String> {
         let mut variants = vec![chromosome.to_string()];
-        if chromosome.starts_with("chr") {
-            variants.push(chromosome[3..].to_string());
+        if let Some(stripped) = chromosome.strip_prefix("chr") {
+            variants.push(stripped.to_string());
         } else {
             variants.push(format!("chr{}", chromosome));
         }
         variants
     }
 
-    fn add_variant(&mut self, variant: VariantRecord) {
-        if let VcfIndex::InMemory { position_index, id_index, .. } = self {
-            // Add to position index
-            position_index
-                .entry(variant.chromosome.clone())
-                .or_default()
-                .push((variant.position, variant.clone()));
-
-            // Add to ID index if ID is not '.'
-            if variant.id != "." {
-                id_index
-                    .entry(variant.id.clone())
-                    .or_default()
-                    .push(variant);
-            }
-        }
-    }
-
-    fn finalize(&mut self) {
-        if let VcfIndex::InMemory { position_index, .. } = self {
-            // Sort position indexes
-            for variants in position_index.values_mut() {
-                variants.sort_by_key(|(pos, _)| *pos);
-            }
-        }
-    }
-
     pub fn query_by_position(&self, chromosome: &str, position: u64) -> Vec<VariantRecord> {
-        match self {
-            VcfIndex::Indexed { vcf_path, index, header } => {
-                // Try both chromosome formats
-                for chr_variant in Self::get_chromosome_variants(chromosome) {
-                    let results = query_indexed_region(vcf_path, index, header, &chr_variant, position, position);
-                    if !results.is_empty() {
-                        return results;
-                    }
-                }
-                Vec::new()
-            }
-            VcfIndex::InMemory { position_index, .. } => {
-                // Try both chromosome formats
-                for chr_variant in Self::get_chromosome_variants(chromosome) {
-                    if let Some(variants) = position_index.get(chr_variant.as_str()) {
-                        let results: Vec<VariantRecord> = variants
-                            .iter()
-                            .filter(|(pos, _)| *pos == position)
-                            .map(|(_, variant)| variant.clone())
-                            .collect();
-                        if !results.is_empty() {
-                            return results;
-                        }
-                    }
-                }
-                Vec::new()
+        // Try both chromosome formats
+        for chr_variant in Self::get_chromosome_variants(chromosome) {
+            let results = query_indexed_region(&self.vcf_path, &self.index, &self.header, &chr_variant, position, position);
+            if !results.is_empty() {
+                return results;
             }
         }
+        Vec::new()
     }
 
     pub fn query_by_region(&self, chromosome: &str, start: u64, end: u64) -> Vec<VariantRecord> {
-        match self {
-            VcfIndex::Indexed { vcf_path, index, header } => {
-                // Try both chromosome formats
-                for chr_variant in Self::get_chromosome_variants(chromosome) {
-                    let results = query_indexed_region(vcf_path, index, header, &chr_variant, start, end);
-                    if !results.is_empty() {
-                        return results;
-                    }
-                }
-                Vec::new()
-            }
-            VcfIndex::InMemory { position_index, .. } => {
-                // Try both chromosome formats
-                for chr_variant in Self::get_chromosome_variants(chromosome) {
-                    if let Some(variants) = position_index.get(chr_variant.as_str()) {
-                        let results: Vec<VariantRecord> = variants
-                            .iter()
-                            .filter(|(pos, _)| *pos >= start && *pos <= end)
-                            .map(|(_, variant)| variant.clone())
-                            .collect();
-                        if !results.is_empty() {
-                            return results;
-                        }
-                    }
-                }
-                Vec::new()
+        // Try both chromosome formats
+        for chr_variant in Self::get_chromosome_variants(chromosome) {
+            let results = query_indexed_region(&self.vcf_path, &self.index, &self.header, &chr_variant, start, end);
+            if !results.is_empty() {
+                return results;
             }
         }
+        Vec::new()
     }
 
     pub fn query_by_id(&self, id: &str) -> Vec<VariantRecord> {
-        match self {
-            VcfIndex::Indexed { vcf_path, index: _, header } => {
-                // For ID queries, we need to scan all variants (no efficient index for IDs in tabix)
-                // Fall back to full scan
-                query_all_by_id(vcf_path, header, id)
-            }
-            VcfIndex::InMemory { id_index, .. } => {
-                id_index
-                    .get(id)
-                    .map(|variants| variants.clone())
-                    .unwrap_or_default()
-            }
-        }
+        // For ID queries, we need to scan all variants (no efficient index for IDs in tabix)
+        // Fall back to full scan
+        query_all_by_id(&self.vcf_path, &self.header, id)
     }
 }
 
@@ -198,11 +103,9 @@ fn query_indexed_region(
         Err(_) => return results,
     };
 
-    for result in query_result {
-        if let Ok(record) = result {
-            if let Ok(variant) = parse_variant_record(&record, header) {
-                results.push(variant);
-            }
+    for record in query_result.flatten() {
+        if let Ok(variant) = parse_variant_record(&record, header) {
+            results.push(variant);
         }
     }
 
@@ -223,12 +126,10 @@ fn query_all_by_id(vcf_path: &PathBuf, header: &vcf::Header, id: &str) -> Vec<Va
     // Skip header (we already have it)
     let _ = reader.read_header();
 
-    for result in reader.records() {
-        if let Ok(record) = result {
-            if let Ok(variant) = parse_variant_record(&record, header) {
-                if variant.id == id {
-                    results.push(variant);
-                }
+    for record in reader.records().flatten() {
+        if let Ok(variant) = parse_variant_record(&record, header) {
+            if variant.id == id {
+                results.push(variant);
             }
         }
     }
@@ -343,64 +244,85 @@ fn parse_variant_record(record: &vcf::Record, header: &vcf::Header) -> std::io::
 }
 
 // Load and index VCF file
-pub fn load_vcf(path: &PathBuf, debug: bool) -> std::io::Result<VcfIndex> {
+pub fn load_vcf(path: &PathBuf, debug: bool, save_index: bool) -> std::io::Result<VcfIndex> {
     // Check if a .tbi index file exists
     let tbi_path = PathBuf::from(format!("{}.tbi", path.display()));
 
-    if tbi_path.exists() {
-        // Use tabix-indexed mode
+    let tabix_index = if tbi_path.exists() {
+        // Use existing tabix index
         if debug {
             eprintln!("Found tabix index: {}", tbi_path.display());
         }
-        eprintln!("Loading VCF file with tabix index...");
-
-        let tabix_index = tabix::fs::read(&tbi_path)?;
-
-        // Read header only
-        let mut vcf_reader = vcf::io::reader::Builder::default()
-            .build_from_path(path)?;
-        let header = vcf_reader.read_header()?;
-
-        eprintln!("VCF loaded (indexed mode)");
-
-        Ok(VcfIndex::Indexed {
-            vcf_path: path.clone(),
-            index: tabix_index,
-            header,
-        })
+        eprintln!("Loading VCF file with existing tabix index...");
+        tabix::fs::read(&tbi_path)?
     } else {
-        // Use in-memory mode (load all variants)
-        eprintln!("Loading VCF file into memory...");
+        // Build tabix index on the fly
+        eprintln!("No tabix index found. Building index...");
+        let index = vcf::fs::index(path)?;
+        eprintln!("Tabix index built successfully");
 
-        let mut index = VcfIndex::new_in_memory();
-
-        let mut vcf_reader = vcf::io::reader::Builder::default()
-            .build_from_path(path)?;
-
-        // Read header
-        let header = vcf_reader.read_header()?;
-        if let VcfIndex::InMemory { header: h, .. } = &mut index {
-            *h = header.clone();
-        }
-
-        let mut line_number = 0;
-        for result in vcf_reader.records() {
-            let record = result?;
-            line_number += 1;
-
-            let variant = parse_variant_record(&record, &header)?;
-            index.add_variant(variant);
-
-            if debug && line_number % 1000 == 0 {
-                eprintln!("Indexed {} variants...", line_number);
+        // Try to save index to disk if requested
+        if save_index {
+            match save_index_to_disk(&index, &tbi_path, debug) {
+                Ok(()) => eprintln!("Tabix index saved to {}", tbi_path.display()),
+                Err(e) => {
+                    eprintln!("Warning: Failed to save tabix index to disk: {}", e);
+                    eprintln!("Continuing with in-memory index...");
+                }
             }
+        } else if debug {
+            eprintln!("Skipping index save (--never-save-index flag set)");
         }
 
-        index.finalize();
-        eprintln!("Finished loading {} variants", line_number);
+        index
+    };
 
-        Ok(index)
+    // Read header only
+    let mut vcf_reader = vcf::io::reader::Builder::default()
+        .build_from_path(path)?;
+    let header = vcf_reader.read_header()?;
+
+    eprintln!("VCF loaded (indexed mode)");
+
+    Ok(VcfIndex {
+        vcf_path: path.clone(),
+        index: tabix_index,
+        header,
+    })
+}
+
+// Helper function to atomically save index to disk
+fn save_index_to_disk(index: &tabix::Index, tbi_path: &PathBuf, debug: bool) -> std::io::Result<()> {
+    use std::fs;
+    use std::io::BufWriter;
+
+    // Create temporary file with .tmp extension
+    let tmp_path = PathBuf::from(format!("{}.tmp", tbi_path.display()));
+
+    if debug {
+        eprintln!("Writing index to temporary file: {}", tmp_path.display());
     }
+
+    // Write index to temporary file
+    {
+        let tmp_file = fs::File::create(&tmp_path)?;
+        let mut writer = tabix::io::Writer::new(BufWriter::new(tmp_file));
+        writer.write_index(index)?;
+    }
+
+    // Check again if .tbi file was created by another process (race condition)
+    if tbi_path.exists() {
+        if debug {
+            eprintln!("Index file appeared during write, removing temporary file");
+        }
+        fs::remove_file(&tmp_path)?;
+        return Ok(());
+    }
+
+    // Atomically rename temp file to final .tbi file
+    fs::rename(&tmp_path, tbi_path)?;
+
+    Ok(())
 }
 
 // Format variant as JSON string
@@ -441,143 +363,6 @@ mod tests {
             filter: "PASS".to_string(),
             info: "NS=3;DP=14;AF=0.5".to_string(),
         }
-    }
-
-    #[test]
-    fn test_query_by_position_exact_match() {
-        let mut index = VcfIndex::new_in_memory();
-        let variant1 = create_test_variant("20", 14370, "rs6054257", "G", vec!["A"]);
-        let variant2 = create_test_variant("20", 17330, "rs6040355", "T", vec!["A"]);
-
-        index.add_variant(variant1);
-        index.add_variant(variant2);
-        index.finalize();
-
-        let results = index.query_by_position("20", 14370);
-        assert_eq!(results.len(), 1);
-        assert_eq!(results[0].id, "rs6054257");
-        assert_eq!(results[0].position, 14370);
-    }
-
-    #[test]
-    fn test_query_by_position_no_match() {
-        let mut index = VcfIndex::new_in_memory();
-        let variant = create_test_variant("20", 14370, "rs6054257", "G", vec!["A"]);
-
-        index.add_variant(variant);
-        index.finalize();
-
-        let results = index.query_by_position("20", 99999);
-        assert_eq!(results.len(), 0);
-    }
-
-    #[test]
-    fn test_query_by_position_different_chromosome() {
-        let mut index = VcfIndex::new_in_memory();
-        let variant = create_test_variant("20", 14370, "rs6054257", "G", vec!["A"]);
-
-        index.add_variant(variant);
-        index.finalize();
-
-        let results = index.query_by_position("X", 14370);
-        assert_eq!(results.len(), 0);
-    }
-
-    #[test]
-    fn test_query_by_region() {
-        let mut index = VcfIndex::new_in_memory();
-        index.add_variant(create_test_variant("20", 14370, "rs6054257", "G", vec!["A"]));
-        index.add_variant(create_test_variant("20", 17330, "rs6040355", "T", vec!["A"]));
-        index.add_variant(create_test_variant("20", 1110696, "rs6040356", "A", vec!["G", "T"]));
-        index.finalize();
-
-        let results = index.query_by_region("20", 14000, 18000);
-        assert_eq!(results.len(), 2);
-        assert_eq!(results[0].position, 14370);
-        assert_eq!(results[1].position, 17330);
-    }
-
-    #[test]
-    fn test_query_by_region_no_matches() {
-        let mut index = VcfIndex::new_in_memory();
-        index.add_variant(create_test_variant("20", 14370, "rs6054257", "G", vec!["A"]));
-        index.finalize();
-
-        let results = index.query_by_region("20", 100000, 200000);
-        assert_eq!(results.len(), 0);
-    }
-
-    #[test]
-    fn test_query_by_region_boundary() {
-        let mut index = VcfIndex::new_in_memory();
-        index.add_variant(create_test_variant("20", 14370, "rs6054257", "G", vec!["A"]));
-        index.finalize();
-
-        // Test inclusive boundaries
-        let results = index.query_by_region("20", 14370, 14370);
-        assert_eq!(results.len(), 1);
-    }
-
-    #[test]
-    fn test_query_by_id() {
-        let mut index = VcfIndex::new_in_memory();
-        index.add_variant(create_test_variant("20", 14370, "rs6054257", "G", vec!["A"]));
-        index.add_variant(create_test_variant("20", 17330, "rs6040355", "T", vec!["A"]));
-        index.finalize();
-
-        let results = index.query_by_id("rs6054257");
-        assert_eq!(results.len(), 1);
-        assert_eq!(results[0].chromosome, "20");
-        assert_eq!(results[0].position, 14370);
-    }
-
-    #[test]
-    fn test_query_by_id_no_match() {
-        let mut index = VcfIndex::new_in_memory();
-        index.add_variant(create_test_variant("20", 14370, "rs6054257", "G", vec!["A"]));
-        index.finalize();
-
-        let results = index.query_by_id("rs99999999");
-        assert_eq!(results.len(), 0);
-    }
-
-    #[test]
-    fn test_query_by_id_dot_not_indexed() {
-        let mut index = VcfIndex::new_in_memory();
-        index.add_variant(create_test_variant("20", 14370, ".", "G", vec!["A"]));
-        index.finalize();
-
-        // Variants with ID "." should not be indexed by ID
-        let results = index.query_by_id(".");
-        assert_eq!(results.len(), 0);
-    }
-
-    #[test]
-    fn test_multiple_variants_same_id() {
-        let mut index = VcfIndex::new_in_memory();
-        index.add_variant(create_test_variant("20", 14370, "rs6054257", "G", vec!["A"]));
-        index.add_variant(create_test_variant("20", 17330, "rs6054257", "T", vec!["A"]));
-        index.finalize();
-
-        let results = index.query_by_id("rs6054257");
-        assert_eq!(results.len(), 2);
-    }
-
-    #[test]
-    fn test_finalize_sorts_positions() {
-        let mut index = VcfIndex::new_in_memory();
-        // Add variants out of order
-        index.add_variant(create_test_variant("20", 1110696, "rs3", "A", vec!["G"]));
-        index.add_variant(create_test_variant("20", 14370, "rs1", "G", vec!["A"]));
-        index.add_variant(create_test_variant("20", 17330, "rs2", "T", vec!["A"]));
-        index.finalize();
-
-        let results = index.query_by_region("20", 0, 2000000);
-        assert_eq!(results.len(), 3);
-        // Check they're returned in sorted order
-        assert_eq!(results[0].position, 14370);
-        assert_eq!(results[1].position, 17330);
-        assert_eq!(results[2].position, 1110696);
     }
 
     #[test]

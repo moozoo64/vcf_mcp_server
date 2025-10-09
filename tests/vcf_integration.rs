@@ -11,7 +11,7 @@ fn test_load_compressed_vcf() {
         return;
     }
 
-    let index = load_vcf(&vcf_path, false).expect("Failed to load VCF file");
+    let index = load_vcf(&vcf_path, false, false).expect("Failed to load VCF file");
 
     // Query by position - should find rs6054257 at 20:14370
     let results = index.query_by_position("20", 14370);
@@ -30,7 +30,7 @@ fn test_query_region_with_real_data() {
         return;
     }
 
-    let index = load_vcf(&vcf_path, false).expect("Failed to load VCF file");
+    let index = load_vcf(&vcf_path, false, false).expect("Failed to load VCF file");
 
     // Query region 20:14000-18000 should find variants at 14370 and 17330
     let results = index.query_by_region("20", 14000, 18000);
@@ -50,7 +50,7 @@ fn test_query_by_id_with_real_data() {
         return;
     }
 
-    let index = load_vcf(&vcf_path, false).expect("Failed to load VCF file");
+    let index = load_vcf(&vcf_path, false, false).expect("Failed to load VCF file");
 
     // Query by rs6040355 - should find variant with multiple alternates
     let results = index.query_by_id("rs6040355");
@@ -69,7 +69,7 @@ fn test_format_variant_with_real_data() {
         return;
     }
 
-    let index = load_vcf(&vcf_path, false).expect("Failed to load VCF file");
+    let index = load_vcf(&vcf_path, false, false).expect("Failed to load VCF file");
     let results = index.query_by_position("20", 14370);
 
     assert!(!results.is_empty(), "Should find variant at 20:14370");
@@ -87,7 +87,7 @@ fn test_format_variant_with_real_data() {
 #[test]
 fn test_load_nonexistent_file() {
     let vcf_path = PathBuf::from("nonexistent.vcf.gz");
-    let result = load_vcf(&vcf_path, false);
+    let result = load_vcf(&vcf_path, false, false);
 
     assert!(result.is_err(), "Loading nonexistent file should return an error");
 }
@@ -101,7 +101,7 @@ fn test_chromosome_x_variant() {
         return;
     }
 
-    let index = load_vcf(&vcf_path, false).expect("Failed to load VCF file");
+    let index = load_vcf(&vcf_path, false, false).expect("Failed to load VCF file");
 
     // Query for variant on chromosome X at position 10
     let results = index.query_by_position("X", 10);
@@ -118,7 +118,7 @@ fn test_microsat_variant() {
         return;
     }
 
-    let index = load_vcf(&vcf_path, false).expect("Failed to load VCF file");
+    let index = load_vcf(&vcf_path, false, false).expect("Failed to load VCF file");
 
     // Query for microsat1 variant
     let results = index.query_by_id("microsat1");

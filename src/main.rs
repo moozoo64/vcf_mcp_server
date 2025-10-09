@@ -1,7 +1,6 @@
 mod vcf;
 
 use clap::Parser;
-use axum;
 use rmcp::{
     ErrorData as McpError,
     RoleServer,
@@ -38,6 +37,10 @@ struct Args {
     /// Enable debug logging
     #[arg(long)]
     debug: bool,
+
+    /// Never save the built tabix index to disk (for read-only/ephemeral environments)
+    #[arg(long)]
+    never_save_index: bool,
 }
 
 // Parameter structs for MCP tools
@@ -71,14 +74,16 @@ struct VcfServer {
     index: Arc<Mutex<VcfIndex>>,
     #[allow(dead_code)]
     tool_router: ToolRouter<Self>,
+    debug: bool,
 }
 
 #[tool_router]
 impl VcfServer {
-    fn new(index: VcfIndex) -> Self {
+    fn new(index: VcfIndex, debug: bool) -> Self {
         VcfServer {
             index: Arc::new(Mutex::new(index)),
             tool_router: Self::tool_router(),
+            debug,
         }
     }
 
@@ -196,9 +201,12 @@ impl ServerHandler for VcfServer {
 
     async fn initialize(
         &self,
-        _request: InitializeRequestParam,
+        request: InitializeRequestParam,
         _: RequestContext<RoleServer>,
     ) -> Result<InitializeResult, McpError> {
+        if self.debug {
+            eprintln!("[DEBUG] Initialize request: {}", serde_json::to_string_pretty(&request).unwrap_or_else(|_| format!("{:?}", request)));
+        }
         Ok(self.get_info())
     }
 
@@ -218,6 +226,9 @@ impl ServerHandler for VcfServer {
         request: CallToolRequestParam,
         ctx: RequestContext<RoleServer>,
     ) -> Result<CallToolResult, McpError> {
+        if self.debug {
+            eprintln!("[DEBUG] Tool call: {}", serde_json::to_string_pretty(&request).unwrap_or_else(|_| format!("{:?}", request)));
+        }
         let tool_ctx = ToolCallContext::new(self, request, ctx);
         self.tool_router.call(tool_ctx).await
     }
@@ -233,10 +244,11 @@ async fn main() -> std::io::Result<()> {
     }
 
     // Load and index the VCF file
-    let index = load_vcf(&args.vcf_file, args.debug)?;
+    let save_index = !args.never_save_index;
+    let index = load_vcf(&args.vcf_file, args.debug, save_index)?;
 
     // Create the MCP server
-    let server = VcfServer::new(index);
+    let server = VcfServer::new(index, args.debug);
 
     // Run server with appropriate transport
     if let Some(addr) = args.sse {
@@ -265,25 +277,46 @@ async fn run_sse_server(server: VcfServer, addr: &str) -> std::io::Result<()> {
         StreamableHttpServerConfig, StreamableHttpService,
         session::local::LocalSessionManager,
     };
+    use axum::{
+        Router,
+        middleware::{self, Next},
+        extract::Request,
+        response::Response,
+    };
 
     let bind_addr: std::net::SocketAddr = addr.parse()
         .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidInput, e))?;
 
     let config = StreamableHttpServerConfig {
         sse_keep_alive: Some(std::time::Duration::from_secs(15)),
-        stateful_mode: true,
+        stateful_mode: false,
     };
 
     let session_manager = Arc::new(LocalSessionManager::default());
 
+    let debug = server.debug;
     let service = StreamableHttpService::new(
         move || Ok(server.clone()),
         session_manager,
         config,
     );
 
-    let app = axum::Router::new()
-        .fallback_service(service);
+    // Logging middleware
+    async fn log_request(
+        req: Request,
+        next: Next,
+        debug: bool,
+    ) -> Response {
+        if debug {
+            eprintln!("[DEBUG] HTTP {} {}", req.method(), req.uri());
+            eprintln!("[DEBUG] Headers: {:?}", req.headers());
+        }
+        next.run(req).await
+    }
+
+    let app = Router::new()
+        .fallback_service(service)
+        .layer(middleware::from_fn(move |req, next| log_request(req, next, debug)));
 
     let listener = tokio::net::TcpListener::bind(bind_addr).await?;
 
@@ -291,5 +324,5 @@ async fn run_sse_server(server: VcfServer, addr: &str) -> std::io::Result<()> {
 
     axum::serve(listener, app)
         .await
-        .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e))
+        .map_err(std::io::Error::other)
 }
