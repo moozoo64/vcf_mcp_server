@@ -192,3 +192,189 @@ pub fn format_variant(variant: &VariantRecord) -> String {
         variant.info
     )
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn create_test_variant(chromosome: &str, position: u64, id: &str, reference: &str, alternate: Vec<&str>) -> VariantRecord {
+        VariantRecord {
+            chromosome: chromosome.to_string(),
+            position,
+            id: id.to_string(),
+            reference: reference.to_string(),
+            alternate: alternate.iter().map(|s| s.to_string()).collect(),
+            quality: Some(29.0),
+            filter: "PASS".to_string(),
+            info: "NS=3;DP=14;AF=0.5".to_string(),
+        }
+    }
+
+    #[test]
+    fn test_query_by_position_exact_match() {
+        let mut index = VcfIndex::new();
+        let variant1 = create_test_variant("20", 14370, "rs6054257", "G", vec!["A"]);
+        let variant2 = create_test_variant("20", 17330, "rs6040355", "T", vec!["A"]);
+
+        index.add_variant(variant1);
+        index.add_variant(variant2);
+        index.finalize();
+
+        let results = index.query_by_position("20", 14370);
+        assert_eq!(results.len(), 1);
+        assert_eq!(results[0].id, "rs6054257");
+        assert_eq!(results[0].position, 14370);
+    }
+
+    #[test]
+    fn test_query_by_position_no_match() {
+        let mut index = VcfIndex::new();
+        let variant = create_test_variant("20", 14370, "rs6054257", "G", vec!["A"]);
+
+        index.add_variant(variant);
+        index.finalize();
+
+        let results = index.query_by_position("20", 99999);
+        assert_eq!(results.len(), 0);
+    }
+
+    #[test]
+    fn test_query_by_position_different_chromosome() {
+        let mut index = VcfIndex::new();
+        let variant = create_test_variant("20", 14370, "rs6054257", "G", vec!["A"]);
+
+        index.add_variant(variant);
+        index.finalize();
+
+        let results = index.query_by_position("X", 14370);
+        assert_eq!(results.len(), 0);
+    }
+
+    #[test]
+    fn test_query_by_region() {
+        let mut index = VcfIndex::new();
+        index.add_variant(create_test_variant("20", 14370, "rs6054257", "G", vec!["A"]));
+        index.add_variant(create_test_variant("20", 17330, "rs6040355", "T", vec!["A"]));
+        index.add_variant(create_test_variant("20", 1110696, "rs6040356", "A", vec!["G", "T"]));
+        index.finalize();
+
+        let results = index.query_by_region("20", 14000, 18000);
+        assert_eq!(results.len(), 2);
+        assert_eq!(results[0].position, 14370);
+        assert_eq!(results[1].position, 17330);
+    }
+
+    #[test]
+    fn test_query_by_region_no_matches() {
+        let mut index = VcfIndex::new();
+        index.add_variant(create_test_variant("20", 14370, "rs6054257", "G", vec!["A"]));
+        index.finalize();
+
+        let results = index.query_by_region("20", 100000, 200000);
+        assert_eq!(results.len(), 0);
+    }
+
+    #[test]
+    fn test_query_by_region_boundary() {
+        let mut index = VcfIndex::new();
+        index.add_variant(create_test_variant("20", 14370, "rs6054257", "G", vec!["A"]));
+        index.finalize();
+
+        // Test inclusive boundaries
+        let results = index.query_by_region("20", 14370, 14370);
+        assert_eq!(results.len(), 1);
+    }
+
+    #[test]
+    fn test_query_by_id() {
+        let mut index = VcfIndex::new();
+        index.add_variant(create_test_variant("20", 14370, "rs6054257", "G", vec!["A"]));
+        index.add_variant(create_test_variant("20", 17330, "rs6040355", "T", vec!["A"]));
+        index.finalize();
+
+        let results = index.query_by_id("rs6054257");
+        assert_eq!(results.len(), 1);
+        assert_eq!(results[0].chromosome, "20");
+        assert_eq!(results[0].position, 14370);
+    }
+
+    #[test]
+    fn test_query_by_id_no_match() {
+        let mut index = VcfIndex::new();
+        index.add_variant(create_test_variant("20", 14370, "rs6054257", "G", vec!["A"]));
+        index.finalize();
+
+        let results = index.query_by_id("rs99999999");
+        assert_eq!(results.len(), 0);
+    }
+
+    #[test]
+    fn test_query_by_id_dot_not_indexed() {
+        let mut index = VcfIndex::new();
+        index.add_variant(create_test_variant("20", 14370, ".", "G", vec!["A"]));
+        index.finalize();
+
+        // Variants with ID "." should not be indexed by ID
+        let results = index.query_by_id(".");
+        assert_eq!(results.len(), 0);
+    }
+
+    #[test]
+    fn test_multiple_variants_same_id() {
+        let mut index = VcfIndex::new();
+        index.add_variant(create_test_variant("20", 14370, "rs6054257", "G", vec!["A"]));
+        index.add_variant(create_test_variant("20", 17330, "rs6054257", "T", vec!["A"]));
+        index.finalize();
+
+        let results = index.query_by_id("rs6054257");
+        assert_eq!(results.len(), 2);
+    }
+
+    #[test]
+    fn test_finalize_sorts_positions() {
+        let mut index = VcfIndex::new();
+        // Add variants out of order
+        index.add_variant(create_test_variant("20", 1110696, "rs3", "A", vec!["G"]));
+        index.add_variant(create_test_variant("20", 14370, "rs1", "G", vec!["A"]));
+        index.add_variant(create_test_variant("20", 17330, "rs2", "T", vec!["A"]));
+        index.finalize();
+
+        let results = index.query_by_region("20", 0, 2000000);
+        assert_eq!(results.len(), 3);
+        // Check they're returned in sorted order
+        assert_eq!(results[0].position, 14370);
+        assert_eq!(results[1].position, 17330);
+        assert_eq!(results[2].position, 1110696);
+    }
+
+    #[test]
+    fn test_format_variant_basic() {
+        let variant = create_test_variant("20", 14370, "rs6054257", "G", vec!["A"]);
+        let json = format_variant(&variant);
+
+        assert!(json.contains(r#""chromosome": "20""#));
+        assert!(json.contains(r#""position": 14370"#));
+        assert!(json.contains(r#""id": "rs6054257""#));
+        assert!(json.contains(r#""reference": "G""#));
+        assert!(json.contains(r#""alternate": ["A"]"#));
+        assert!(json.contains(r#""quality": 29"#));
+        assert!(json.contains(r#""filter": "PASS""#));
+    }
+
+    #[test]
+    fn test_format_variant_multiple_alternates() {
+        let variant = create_test_variant("20", 1110696, "rs6040355", "A", vec!["G", "T"]);
+        let json = format_variant(&variant);
+
+        assert!(json.contains(r#""alternate": ["G", "T"]"#));
+    }
+
+    #[test]
+    fn test_format_variant_no_quality() {
+        let mut variant = create_test_variant("20", 14370, "rs6054257", "G", vec!["A"]);
+        variant.quality = None;
+        let json = format_variant(&variant);
+
+        assert!(json.contains(r#""quality": null"#));
+    }
+}
