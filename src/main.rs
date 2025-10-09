@@ -1,13 +1,7 @@
 mod vcf;
 
 use clap::Parser;
-use hyper::{
-    Request, StatusCode,
-    body::Incoming,
-    header::{HeaderValue, UPGRADE},
-    service::service_fn,
-};
-use hyper_util::rt::TokioIo;
+use axum;
 use rmcp::{
     ErrorData as McpError,
     RoleServer,
@@ -37,9 +31,9 @@ struct Args {
     /// Path to the VCF file
     vcf_file: PathBuf,
 
-    /// Run HTTP server on specified address (e.g., 0.0.0.0:8089)
+    /// Run HTTP server on specified address (e.g., 0.0.0.0:8090)
     #[arg(long, value_name = "ADDR:PORT")]
-    http: Option<String>,
+    sse: Option<String>,
 
     /// Enable debug logging
     #[arg(long)]
@@ -245,9 +239,9 @@ async fn main() -> std::io::Result<()> {
     let server = VcfServer::new(index);
 
     // Run server with appropriate transport
-    if let Some(addr) = args.http {
-        eprintln!("VCF MCP Server ready. Starting HTTP transport on {}...", addr);
-        run_http_server(server, &addr).await?;
+    if let Some(addr) = args.sse {
+        eprintln!("VCF MCP Server ready. Starting SSE transport on {}...", addr);
+        run_sse_server(server, &addr).await?;
     } else {
         eprintln!("VCF MCP Server ready. Starting stdio transport...");
 
@@ -266,52 +260,36 @@ async fn main() -> std::io::Result<()> {
     Ok(())
 }
 
-async fn run_http_server(server: VcfServer, addr: &str) -> std::io::Result<()> {
-    let listener = tokio::net::TcpListener::bind(addr).await?;
+async fn run_sse_server(server: VcfServer, addr: &str) -> std::io::Result<()> {
+    use rmcp::transport::streamable_http_server::{
+        StreamableHttpServerConfig, StreamableHttpService,
+        session::local::LocalSessionManager,
+    };
 
-    loop {
-        let (stream, _) = listener.accept().await?;
-        let server = server.clone();
+    let bind_addr: std::net::SocketAddr = addr.parse()
+        .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidInput, e))?;
 
-        tokio::spawn(async move {
-            let io = TokioIo::new(stream);
+    let config = StreamableHttpServerConfig {
+        sse_keep_alive: Some(std::time::Duration::from_secs(15)),
+        stateful_mode: true,
+    };
 
-            let service = service_fn(move |req: Request<Incoming>| {
-                let server = server.clone();
-                async move {
-                    handle_http_request(server, req).await
-                }
-            });
+    let session_manager = Arc::new(LocalSessionManager::default());
 
-            if let Err(e) = hyper_util::server::conn::auto::Builder::new(
-                hyper_util::rt::TokioExecutor::new()
-            )
-            .serve_connection(io, service)
-            .await
-            {
-                eprintln!("Error serving connection: {}", e);
-            }
-        });
-    }
-}
+    let service = StreamableHttpService::new(
+        move || Ok(server.clone()),
+        session_manager,
+        config,
+    );
 
-async fn handle_http_request(
-    server: VcfServer,
-    req: Request<Incoming>
-) -> Result<hyper::Response<String>, hyper::Error> {
-    tokio::spawn(async move {
-        let upgraded = hyper::upgrade::on(req).await?;
-        let service = server
-            .serve(TokioIo::new(upgraded))
-            .await?;
-        service.waiting().await?;
-        anyhow::Result::<()>::Ok(())
-    });
+    let app = axum::Router::new()
+        .fallback_service(service);
 
-    let mut response = hyper::Response::new(String::new());
-    *response.status_mut() = StatusCode::SWITCHING_PROTOCOLS;
-    response
-        .headers_mut()
-        .insert(UPGRADE, HeaderValue::from_static("mcp"));
-    Ok(response)
+    let listener = tokio::net::TcpListener::bind(bind_addr).await?;
+
+    eprintln!("Streamable HTTP MCP server listening on http://{}", bind_addr);
+
+    axum::serve(listener, app)
+        .await
+        .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e))
 }

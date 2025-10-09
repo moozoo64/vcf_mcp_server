@@ -6,11 +6,13 @@ license = "MIT"
 
 [dependencies]
 noodles = { version = "0.101.0", features = ["bgzf", "core", "tabix", "vcf"] }
-rmcp = { version = "0.8", features = ["server", "transport-io"] }
+rmcp = { version = "0.8", features = ["server", "transport-io", "transport-streamable-http-server"] }
 tokio = { version = "1", features = ["full"] }
+tokio-util = "0.7"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 clap = { version = "4", features = ["derive"] }
 hyper = { version = "1", features = ["server", "http1"] }
 hyper-util = { version = "0.1", features = ["tokio", "server", "server-auto"] }
+axum = "0.8"
 anyhow = "1"
