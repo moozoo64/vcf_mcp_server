@@ -1,5 +1,13 @@
 mod vcf;
 
+use clap::Parser;
+use hyper::{
+    Request, StatusCode,
+    body::Incoming,
+    header::{HeaderValue, UPGRADE},
+    service::service_fn,
+};
+use hyper_util::rt::TokioIo;
 use rmcp::{
     ErrorData as McpError,
     RoleServer,
@@ -15,11 +23,23 @@ use rmcp::{
     tool,
     tool_router,
 };
-use std::env;
 use std::path::PathBuf;
 use std::sync::Arc;
 use tokio::sync::Mutex;
 use vcf::{VcfIndex, format_variant, load_vcf};
+
+// CLI arguments
+#[derive(Parser, Debug)]
+#[command(name = "vcf_mcp_server")]
+#[command(about = "VCF MCP Server - expose VCF files via MCP protocol", long_about = None)]
+struct Args {
+    /// Path to the VCF file
+    vcf_file: PathBuf,
+
+    /// Run HTTP server on specified address (e.g., 0.0.0.0:8089)
+    #[arg(long, value_name = "ADDR:PORT")]
+    http: Option<String>,
+}
 
 // Parameter structs for MCP tools
 #[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
@@ -186,38 +206,87 @@ impl ServerHandler for VcfServer {
 
 #[tokio::main]
 async fn main() -> std::io::Result<()> {
-    let args: Vec<String> = env::args().collect();
+    let args = Args::parse();
 
-    if args.len() < 2 {
-        eprintln!("Usage: {} <vcf_file_path>", args[0]);
-        std::process::exit(1);
-    }
-
-    let vcf_path = PathBuf::from(&args[1]);
-
-    if !vcf_path.exists() {
-        eprintln!("Error: VCF file not found: {}", vcf_path.display());
+    if !args.vcf_file.exists() {
+        eprintln!("Error: VCF file not found: {}", args.vcf_file.display());
         std::process::exit(1);
     }
 
     // Load and index the VCF file
-    let index = load_vcf(&vcf_path)?;
+    let index = load_vcf(&args.vcf_file)?;
 
-    // Create and run the MCP server
+    // Create the MCP server
     let server = VcfServer::new(index);
 
-    println!("VCF MCP Server ready. Starting stdio transport...");
+    // Run server with appropriate transport
+    if let Some(addr) = args.http {
+        println!("VCF MCP Server ready. Starting HTTP transport on {}...", addr);
+        run_http_server(server, &addr).await?;
+    } else {
+        println!("VCF MCP Server ready. Starting stdio transport...");
 
-    // Run the server using stdio transport
-    let service = server
-        .serve(rmcp::transport::stdio())
-        .await
-        .map_err(|e| std::io::Error::other(e.to_string()))?;
+        // Run the server using stdio transport
+        let service = server
+            .serve(rmcp::transport::stdio())
+            .await
+            .map_err(|e| std::io::Error::other(e.to_string()))?;
 
-    service
-        .waiting()
-        .await
-        .map_err(|e| std::io::Error::other(e.to_string()))?;
+        service
+            .waiting()
+            .await
+            .map_err(|e| std::io::Error::other(e.to_string()))?;
+    }
 
     Ok(())
+}
+
+async fn run_http_server(server: VcfServer, addr: &str) -> std::io::Result<()> {
+    let listener = tokio::net::TcpListener::bind(addr).await?;
+
+    loop {
+        let (stream, _) = listener.accept().await?;
+        let server = server.clone();
+
+        tokio::spawn(async move {
+            let io = TokioIo::new(stream);
+
+            let service = service_fn(move |req: Request<Incoming>| {
+                let server = server.clone();
+                async move {
+                    handle_http_request(server, req).await
+                }
+            });
+
+            if let Err(e) = hyper_util::server::conn::auto::Builder::new(
+                hyper_util::rt::TokioExecutor::new()
+            )
+            .serve_connection(io, service)
+            .await
+            {
+                eprintln!("Error serving connection: {}", e);
+            }
+        });
+    }
+}
+
+async fn handle_http_request(
+    server: VcfServer,
+    req: Request<Incoming>
+) -> Result<hyper::Response<String>, hyper::Error> {
+    tokio::spawn(async move {
+        let upgraded = hyper::upgrade::on(req).await?;
+        let service = server
+            .serve(TokioIo::new(upgraded))
+            .await?;
+        service.waiting().await?;
+        anyhow::Result::<()>::Ok(())
+    });
+
+    let mut response = hyper::Response::new(String::new());
+    *response.status_mut() = StatusCode::SWITCHING_PROTOCOLS;
+    response
+        .headers_mut()
+        .insert(UPGRADE, HeaderValue::from_static("mcp"));
+    Ok(response)
 }
