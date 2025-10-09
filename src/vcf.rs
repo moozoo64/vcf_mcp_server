@@ -32,7 +32,6 @@ pub struct VcfMetadata {
 #[derive(Debug, Clone, serde::Serialize)]
 pub struct ContigInfo {
     pub id: String,
-    pub length: Option<u64>,
 }
 
 // VCF index structure - uses tabix index for efficient queries
@@ -171,12 +170,8 @@ fn extract_metadata(header: &vcf::Header) -> VcfMetadata {
     let contigs: Vec<ContigInfo> = header
         .contigs()
         .keys()
-        .map(|id| {
-            // For now, we don't try to parse length from noodles as the API is complex
-            ContigInfo {
-                id: id.to_string(),
-                length: None,
-            }
+        .map(|id| ContigInfo {
+            id: id.to_string(),
         })
         .collect();
 
