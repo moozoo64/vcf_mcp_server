@@ -94,7 +94,7 @@ impl VcfServer {
         let content = if variants.is_empty() {
             format!("No variants found at {}:{}", chromosome, position)
         } else {
-            let variant_json: Vec<String> = variants.iter().map(|v| format_variant(v)).collect();
+            let variant_json: Vec<String> = variants.iter().map(format_variant).collect();
             format!(
                 "Found {} variant(s):\n[{}]",
                 variants.len(),
@@ -119,7 +119,7 @@ impl VcfServer {
                 chromosome, start, end
             )
         } else {
-            let variant_json: Vec<String> = variants.iter().map(|v| format_variant(v)).collect();
+            let variant_json: Vec<String> = variants.iter().map(format_variant).collect();
             format!(
                 "Found {} variant(s):\n[{}]",
                 variants.len(),
@@ -141,7 +141,7 @@ impl VcfServer {
         let content = if variants.is_empty() {
             format!("No variants found with ID '{}'", id)
         } else {
-            let variant_json: Vec<String> = variants.iter().map(|v| format_variant(v)).collect();
+            let variant_json: Vec<String> = variants.iter().map(format_variant).collect();
             format!(
                 "Found {} variant(s):\n[{}]",
                 variants.len(),

@@ -5,7 +5,7 @@ edition = "2021"
 license = "MIT"
 
 [dependencies]
-noodles = { version = "0.101.0", features = ["tabix", "vcf"] }
+noodles = { version = "0.101.0", features = ["bgzf", "core", "tabix", "vcf"] }
 rmcp = { version = "0.8", features = ["server", "transport-io"] }
 tokio = { version = "1", features = ["full"] }
 serde = { version = "1", features = ["derive"] }

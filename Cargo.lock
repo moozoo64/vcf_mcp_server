@@ -657,6 +657,8 @@ version = "0.101.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "aab24c2e22c6a42936a7970c5aa9a79fe54a113627e845dc786dd1e845fc9b72"
 dependencies = [
+ "noodles-bgzf",
+ "noodles-core",
  "noodles-tabix",
  "noodles-vcf",
 ]

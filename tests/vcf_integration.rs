@@ -74,7 +74,7 @@ fn test_format_variant_with_real_data() {
 
     assert!(!results.is_empty(), "Should find variant at 20:14370");
 
-    let json = format_variant(results[0]);
+    let json = format_variant(&results[0]);
 
     // Verify JSON contains expected fields
     assert!(json.contains(r#""chromosome": "20""#));
