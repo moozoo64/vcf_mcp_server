@@ -205,6 +205,57 @@ fn query_all_by_id(vcf_path: &PathBuf, header: &vcf::Header, id: &str) -> Vec<Va
     results
 }
 
+// Helper function to clean up debug-formatted info values
+// Converts: Array([Ok(Some(1))]) -> 1, Float(-0.549) -> -0.549, etc.
+fn clean_info_value(debug_str: &str) -> String {
+    let s = debug_str;
+
+    // Handle common patterns:
+    // Integer(123) -> 123
+    // Float(1.23) -> 1.23
+    // String("foo") -> foo
+    // Array([Ok(Some(1)), Ok(Some(2))]) -> 1,2
+    // Flag -> empty string
+
+    if s == "Flag" {
+        return String::new();
+    }
+
+    // Match Integer(value), Float(value), Character(value)
+    if let Some(inner) = s.strip_prefix("Integer(").and_then(|s| s.strip_suffix(')')) {
+        return inner.to_string();
+    }
+    if let Some(inner) = s.strip_prefix("Float(").and_then(|s| s.strip_suffix(')')) {
+        return inner.to_string();
+    }
+    if let Some(inner) = s.strip_prefix("Character(").and_then(|s| s.strip_suffix(')')) {
+        return inner.trim_matches('\'').to_string();
+    }
+
+    // Match String("value")
+    if let Some(inner) = s.strip_prefix("String(\"").and_then(|s| s.strip_suffix("\")")) {
+        return inner.to_string();
+    }
+
+    // Match Array([...])
+    if let Some(inner) = s.strip_prefix("Array([").and_then(|s| s.strip_suffix("])")) {
+        // Extract Ok(Some(value)) patterns
+        let values: Vec<String> = inner
+            .split("), ")
+            .filter_map(|part| {
+                // Match Ok(Some(value))
+                let part = part.trim_end_matches(')');
+                part.strip_prefix("Ok(Some(")
+                    .map(|v| v.trim_matches('"').to_string())
+            })
+            .collect();
+        return values.join(",");
+    }
+
+    // Fall back to original if no pattern matched
+    s.to_string()
+}
+
 // Helper function to parse a VCF record into a VariantRecord
 fn parse_variant_record(record: &vcf::Record, header: &vcf::Header) -> std::io::Result<VariantRecord> {
     Ok(VariantRecord {
@@ -243,7 +294,13 @@ fn parse_variant_record(record: &vcf::Record, header: &vcf::Header) -> std::io::
             .iter(header)
             .map(|item| {
                 item.map(|(key, value)| if let Some(val) = value {
-                    format!("{}={:?}", key, val)
+                    let debug_str = format!("{:?}", val);
+                    let clean_value = clean_info_value(&debug_str);
+                    if clean_value.is_empty() {
+                        key.to_string() // For flags
+                    } else {
+                        format!("{}={}", key, clean_value)
+                    }
                 } else {
                     key.to_string()
                 })
@@ -255,14 +312,16 @@ fn parse_variant_record(record: &vcf::Record, header: &vcf::Header) -> std::io::
 }
 
 // Load and index VCF file
-pub fn load_vcf(path: &PathBuf) -> std::io::Result<VcfIndex> {
+pub fn load_vcf(path: &PathBuf, debug: bool) -> std::io::Result<VcfIndex> {
     // Check if a .tbi index file exists
     let tbi_path = PathBuf::from(format!("{}.tbi", path.display()));
 
     if tbi_path.exists() {
         // Use tabix-indexed mode
-        println!("Found tabix index: {}", tbi_path.display());
-        println!("Loading VCF file with tabix index: {}", path.display());
+        if debug {
+            eprintln!("Found tabix index: {}", tbi_path.display());
+        }
+        eprintln!("Loading VCF file with tabix index...");
 
         let tabix_index = tabix::fs::read(&tbi_path)?;
 
@@ -271,7 +330,7 @@ pub fn load_vcf(path: &PathBuf) -> std::io::Result<VcfIndex> {
             .build_from_path(path)?;
         let header = vcf_reader.read_header()?;
 
-        println!("VCF loaded in indexed mode (using .tbi file)");
+        eprintln!("VCF loaded (indexed mode)");
 
         Ok(VcfIndex::Indexed {
             vcf_path: path.clone(),
@@ -280,7 +339,7 @@ pub fn load_vcf(path: &PathBuf) -> std::io::Result<VcfIndex> {
         })
     } else {
         // Use in-memory mode (load all variants)
-        println!("No tabix index found, loading VCF file into memory: {}", path.display());
+        eprintln!("Loading VCF file into memory...");
 
         let mut index = VcfIndex::new_in_memory();
 
@@ -301,13 +360,13 @@ pub fn load_vcf(path: &PathBuf) -> std::io::Result<VcfIndex> {
             let variant = parse_variant_record(&record, &header)?;
             index.add_variant(variant);
 
-            if line_number % 1000 == 0 {
-                println!("Indexed {} variants...", line_number);
+            if debug && line_number % 1000 == 0 {
+                eprintln!("Indexed {} variants...", line_number);
             }
         }
 
         index.finalize();
-        println!("Finished indexing {} variants", line_number);
+        eprintln!("Finished loading {} variants", line_number);
 
         Ok(index)
     }

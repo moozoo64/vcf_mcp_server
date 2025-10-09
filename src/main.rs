@@ -15,6 +15,7 @@ use rmcp::{
     ServiceExt,
     handler::server::{
         router::tool::ToolRouter,
+        tool::ToolCallContext,
         wrapper::Parameters,
     },
     model::*,
@@ -39,6 +40,10 @@ struct Args {
     /// Run HTTP server on specified address (e.g., 0.0.0.0:8089)
     #[arg(long, value_name = "ADDR:PORT")]
     http: Option<String>,
+
+    /// Enable debug logging
+    #[arg(long)]
+    debug: bool,
 }
 
 // Parameter structs for MCP tools
@@ -202,6 +207,26 @@ impl ServerHandler for VcfServer {
     ) -> Result<InitializeResult, McpError> {
         Ok(self.get_info())
     }
+
+    async fn list_tools(
+        &self,
+        _request: Option<PaginatedRequestParam>,
+        _: RequestContext<RoleServer>,
+    ) -> Result<ListToolsResult, McpError> {
+        Ok(ListToolsResult {
+            tools: self.tool_router.list_all(),
+            next_cursor: None,
+        })
+    }
+
+    async fn call_tool(
+        &self,
+        request: CallToolRequestParam,
+        ctx: RequestContext<RoleServer>,
+    ) -> Result<CallToolResult, McpError> {
+        let tool_ctx = ToolCallContext::new(self, request, ctx);
+        self.tool_router.call(tool_ctx).await
+    }
 }
 
 #[tokio::main]
@@ -214,17 +239,17 @@ async fn main() -> std::io::Result<()> {
     }
 
     // Load and index the VCF file
-    let index = load_vcf(&args.vcf_file)?;
+    let index = load_vcf(&args.vcf_file, args.debug)?;
 
     // Create the MCP server
     let server = VcfServer::new(index);
 
     // Run server with appropriate transport
     if let Some(addr) = args.http {
-        println!("VCF MCP Server ready. Starting HTTP transport on {}...", addr);
+        eprintln!("VCF MCP Server ready. Starting HTTP transport on {}...", addr);
         run_http_server(server, &addr).await?;
     } else {
-        println!("VCF MCP Server ready. Starting stdio transport...");
+        eprintln!("VCF MCP Server ready. Starting stdio transport...");
 
         // Run the server using stdio transport
         let service = server
