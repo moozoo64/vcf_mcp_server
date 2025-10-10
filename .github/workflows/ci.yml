@@ -28,7 +28,7 @@ jobs:
       - uses: dtolnay/rust-toolchain@6d653acede28d24f02e3cd41383119e8b1b35921
         with:
           components: clippy
-      - uses: Swatinem/rust-cache@v2
+      - uses: Swatinem/rust-cache@51dda28b917a50812be2827c6ba2930ce4df144a
       - name: Run clippy
         run: cargo clippy --all-targets --all-features -- -D warnings
 
