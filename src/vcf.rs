@@ -1,5 +1,6 @@
 use noodles::bgzf;
 use noodles::core::{Position, Region};
+use noodles::csi::BinningIndex;
 use noodles::tabix;
 use noodles::vcf;
 use noodles::vcf::variant::record::{AlternateBases, Filters, Ids};
@@ -56,11 +57,28 @@ impl VcfIndex {
 
     // Get list of chromosomes present in the VCF file
     pub fn get_available_chromosomes(&self) -> Vec<String> {
-        self.header
+        // Try to get chromosomes from VCF header contigs first
+        let from_header: Vec<String> = self
+            .header
             .contigs()
             .keys()
             .map(|k| k.to_string())
-            .collect()
+            .collect();
+
+        if !from_header.is_empty() {
+            return from_header;
+        }
+
+        // Fall back to tabix index if header has no contigs
+        if let Some(header) = self.index.header() {
+            header
+                .reference_sequence_names()
+                .iter()
+                .map(|s| s.to_string())
+                .collect()
+        } else {
+            Vec::new()
+        }
     }
 
     // Check if a chromosome (or its variant) exists in the header

@@ -5,7 +5,7 @@ edition = "2021"
 license = "MIT"
 
 [dependencies]
-noodles = { version = "0.101.0", features = ["bgzf", "core", "tabix", "vcf"] }
+noodles = { version = "0.101.0", features = ["bgzf", "core", "csi", "tabix", "vcf"] }
 rmcp = { version = "0.8", features = ["server", "transport-io", "transport-streamable-http-server"] }
 tokio = { version = "1", features = ["full"] }
 tokio-util = "0.7"
