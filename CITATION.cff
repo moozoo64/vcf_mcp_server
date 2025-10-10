@@ -1,0 +1,19 @@
+# This CITATION.cff file was generated with cffinit.
+# Visit https://bit.ly/cffinit to generate yours today!
+
+cff-version: 1.2.0
+title: vcf_mcp_server
+message: >-
+  If you use this software, please cite it using the
+  metadata from this file.
+type: software
+authors:
+  - orcid: 'https://orcid.org/0000-0003-2069-7362'
+    given-names: Jade
+    family-names: Auer
+    email: jade@jade.wtf
+repository-code: 'https://github.com/jda/vcf_mcp_server/'
+abstract: >-
+  MCP Server to facilitate exploring Variant Calling Format
+  (VCF) files using LLM agents
+license: MIT
