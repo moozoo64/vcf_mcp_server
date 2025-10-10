@@ -16,6 +16,8 @@ jobs:
     steps:
       - uses: actions/checkout@ff7abcd0c3c05ccf6adc123a8cd1fd4fb30fb493
       - uses: dtolnay/rust-toolchain@6d653acede28d24f02e3cd41383119e8b1b35921
+        with:
+          toolchain: stable
       - uses: Swatinem/rust-cache@51dda28b917a50812be2827c6ba2930ce4df144a
       - name: Run tests
         run: cargo test --verbose
@@ -40,6 +42,7 @@ jobs:
       - uses: dtolnay/rust-toolchain@6d653acede28d24f02e3cd41383119e8b1b35921
         with:
           components: rustfmt
+          toolchain: stable
       - name: Check formatting
         run: cargo fmt --all -- --check
 
@@ -49,6 +52,8 @@ jobs:
     steps:
       - uses: actions/checkout@ff7abcd0c3c05ccf6adc123a8cd1fd4fb30fb493
       - uses: dtolnay/rust-toolchain@6d653acede28d24f02e3cd41383119e8b1b35921
+        with:
+          toolchain: stable
       - uses: Swatinem/rust-cache@51dda28b917a50812be2827c6ba2930ce4df144a
       - name: Build
         run: cargo build --release --verbose
