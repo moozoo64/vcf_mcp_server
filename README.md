@@ -18,27 +18,8 @@ The binary will be at `./target/release/vcf_mcp_server`
 
 ## Usage
 
-### Basic Usage (stdio transport)
-
-```bash
-./target/release/vcf_mcp_server <path-to-vcf-file>
-```
-
-Example:
-```bash
-./target/release/vcf_mcp_server sample_data/sample.compressed.vcf.gz
-```
-
-### HTTP/SSE Transport
-
-```bash
-./target/release/vcf_mcp_server <path-to-vcf-file> --sse <addr:port>
-```
-
-Example:
-```bash
-./target/release/vcf_mcp_server sample_data/sample.compressed.vcf.gz --sse 0.0.0.0:8090
-```
+* stdio transport: ```./target/release/vcf_mcp_server sample_data/sample.compressed.vcf.gz```
+* HTTP/SSE transport: ```./target/release/vcf_mcp_server sample_data/sample.compressed.vcf.gz --sse 0.0.0.0:8090```
 
 ### Options
 
@@ -47,8 +28,6 @@ Example:
 - `--never-save-index` - Never save the built tabix index to disk (for read-only/ephemeral environments)
 
 ## Available MCP Tools
-
-The server exposes three tools for querying variants:
 
 ### 1. `query_by_position`
 Query variants at a specific genomic position.
@@ -124,7 +103,7 @@ If not, you can create them using the following commands:
    # Creates myfile.vcf.gz.tbi
    ```
 
-The server will automatically use the `.tbi` index file if present, or build an in-memory index (and save it by default) if not.
+The server will automatically use the `.tbi` index file if present, or build an in-memory index. The tabix file will be saved it alongside your VCF file if it doesn't already exist and `--never-save-index` was not used.
 
 ### Uncompressed VCF Files
 
