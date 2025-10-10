@@ -68,27 +68,47 @@ impl VcfIndex {
         let variants = Self::get_chromosome_variants(chromosome);
         let available = self.get_available_chromosomes();
 
-        for variant in variants {
-            if available.contains(&variant) {
-                return Some(variant);
-            }
-        }
-        None
+        variants
+            .into_iter()
+            .find(|variant| available.contains(variant))
     }
 
-    pub fn query_by_position(&self, chromosome: &str, position: u64) -> (Vec<VariantRecord>, Option<String>) {
+    pub fn query_by_position(
+        &self,
+        chromosome: &str,
+        position: u64,
+    ) -> (Vec<VariantRecord>, Option<String>) {
         // Try to find the matching chromosome format
         if let Some(matching_chr) = self.find_matching_chromosome(chromosome) {
-            let results = query_indexed_region(&self.vcf_path, &self.index, &self.header, &matching_chr, position, position);
+            let results = query_indexed_region(
+                &self.vcf_path,
+                &self.index,
+                &self.header,
+                &matching_chr,
+                position,
+                position,
+            );
             return (results, Some(matching_chr));
         }
         (Vec::new(), None)
     }
 
-    pub fn query_by_region(&self, chromosome: &str, start: u64, end: u64) -> (Vec<VariantRecord>, Option<String>) {
+    pub fn query_by_region(
+        &self,
+        chromosome: &str,
+        start: u64,
+        end: u64,
+    ) -> (Vec<VariantRecord>, Option<String>) {
         // Try to find the matching chromosome format
         if let Some(matching_chr) = self.find_matching_chromosome(chromosome) {
-            let results = query_indexed_region(&self.vcf_path, &self.index, &self.header, &matching_chr, start, end);
+            let results = query_indexed_region(
+                &self.vcf_path,
+                &self.index,
+                &self.header,
+                &matching_chr,
+                start,
+                end,
+            );
             return (results, Some(matching_chr));
         }
         (Vec::new(), None)
@@ -188,9 +208,7 @@ fn extract_metadata(header: &vcf::Header) -> VcfMetadata {
     let contigs: Vec<ContigInfo> = header
         .contigs()
         .keys()
-        .map(|id| ContigInfo {
-            id: id.to_string(),
-        })
+        .map(|id| ContigInfo { id: id.to_string() })
         .collect();
 
     // Extract sample names
@@ -241,12 +259,18 @@ fn convert_info_value(debug_str: &str) -> serde_json::Value {
     }
 
     // Match Character(value)
-    if let Some(inner) = s.strip_prefix("Character(").and_then(|s| s.strip_suffix(')')) {
+    if let Some(inner) = s
+        .strip_prefix("Character(")
+        .and_then(|s| s.strip_suffix(')'))
+    {
         return serde_json::Value::String(inner.trim_matches('\'').to_string());
     }
 
     // Match String("value")
-    if let Some(inner) = s.strip_prefix("String(\"").and_then(|s| s.strip_suffix("\")")) {
+    if let Some(inner) = s
+        .strip_prefix("String(\"")
+        .and_then(|s| s.strip_suffix("\")"))
+    {
         return serde_json::Value::String(inner.to_string());
     }
 
@@ -281,7 +305,10 @@ fn convert_info_value(debug_str: &str) -> serde_json::Value {
 }
 
 // Helper function to parse a VCF record into a VariantRecord
-fn parse_variant_record(record: &vcf::Record, header: &vcf::Header) -> std::io::Result<VariantRecord> {
+fn parse_variant_record(
+    record: &vcf::Record,
+    header: &vcf::Header,
+) -> std::io::Result<VariantRecord> {
     Ok(VariantRecord {
         chromosome: record.reference_sequence_name().to_string(),
         position: usize::from(
@@ -289,19 +316,19 @@ fn parse_variant_record(record: &vcf::Record, header: &vcf::Header) -> std::io::
                 .variant_start()
                 .transpose()
                 .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))?
-                .ok_or_else(|| std::io::Error::new(std::io::ErrorKind::InvalidData, "Missing position"))?,
+                .ok_or_else(|| {
+                    std::io::Error::new(std::io::ErrorKind::InvalidData, "Missing position")
+                })?,
         ) as u64,
-        id: record
-            .ids()
-            .iter()
-            .next()
-            .unwrap_or(".")
-            .to_string(),
+        id: record.ids().iter().next().unwrap_or(".").to_string(),
         reference: record.reference_bases().to_string(),
         alternate: record
             .alternate_bases()
             .iter()
-            .map(|alt| alt.map(|a| a.to_string()).unwrap_or_else(|_| ".".to_string()))
+            .map(|alt| {
+                alt.map(|a| a.to_string())
+                    .unwrap_or_else(|_| ".".to_string())
+            })
             .collect(),
         quality: record
             .quality_score()
@@ -316,17 +343,19 @@ fn parse_variant_record(record: &vcf::Record, header: &vcf::Header) -> std::io::
         info: record
             .info()
             .iter(header)
-            .filter_map(|item| item.ok())
-            .filter_map(|(key, value)| {
-                if let Some(val) = value {
-                    let debug_str = format!("{:?}", val);
-                    let json_value = convert_info_value(&debug_str);
-                    Some((key.to_string(), json_value))
-                } else {
-                    // Flag with no value - just the key is present
-                    Some((key.to_string(), serde_json::Value::Bool(true)))
-                }
+            .map(|item| {
+                item.map(|(key, value)| {
+                    if let Some(val) = value {
+                        let debug_str = format!("{:?}", val);
+                        let json_value = convert_info_value(&debug_str);
+                        (key.to_string(), json_value)
+                    } else {
+                        // Flag with no value - just the key is present
+                        (key.to_string(), serde_json::Value::Bool(true))
+                    }
+                })
             })
+            .filter_map(|item| item.ok())
             .collect(),
     })
 }
@@ -366,8 +395,7 @@ pub fn load_vcf(path: &PathBuf, debug: bool, save_index: bool) -> std::io::Resul
     };
 
     // Read header only
-    let mut vcf_reader = vcf::io::reader::Builder::default()
-        .build_from_path(path)?;
+    let mut vcf_reader = vcf::io::reader::Builder::default().build_from_path(path)?;
     let header = vcf_reader.read_header()?;
 
     eprintln!("VCF loaded (indexed mode)");
@@ -380,7 +408,11 @@ pub fn load_vcf(path: &PathBuf, debug: bool, save_index: bool) -> std::io::Resul
 }
 
 // Helper function to atomically save index to disk
-fn save_index_to_disk(index: &tabix::Index, tbi_path: &PathBuf, debug: bool) -> std::io::Result<()> {
+fn save_index_to_disk(
+    index: &tabix::Index,
+    tbi_path: &PathBuf,
+    debug: bool,
+) -> std::io::Result<()> {
     use std::fs;
     use std::io::BufWriter;
 
@@ -422,11 +454,22 @@ pub fn format_variant(variant: &VariantRecord) -> String {
 mod tests {
     use super::*;
 
-    fn create_test_variant(chromosome: &str, position: u64, id: &str, reference: &str, alternate: Vec<&str>) -> VariantRecord {
+    fn create_test_variant(
+        chromosome: &str,
+        position: u64,
+        id: &str,
+        reference: &str,
+        alternate: Vec<&str>,
+    ) -> VariantRecord {
         let mut info = HashMap::new();
         info.insert("NS".to_string(), serde_json::Value::Number(3.into()));
         info.insert("DP".to_string(), serde_json::Value::Number(14.into()));
-        info.insert("AF".to_string(), serde_json::Number::from_f64(0.5).map(serde_json::Value::Number).unwrap());
+        info.insert(
+            "AF".to_string(),
+            serde_json::Number::from_f64(0.5)
+                .map(serde_json::Value::Number)
+                .unwrap(),
+        );
 
         VariantRecord {
             chromosome: chromosome.to_string(),

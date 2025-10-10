@@ -2,25 +2,16 @@ mod vcf;
 
 use clap::Parser;
 use rmcp::{
-    ErrorData as McpError,
-    RoleServer,
-    ServerHandler,
-    ServiceExt,
-    handler::server::{
-        router::tool::ToolRouter,
-        tool::ToolCallContext,
-        wrapper::Parameters,
-    },
+    handler::server::{router::tool::ToolRouter, tool::ToolCallContext, wrapper::Parameters},
     model::*,
     schemars,
     service::RequestContext,
-    tool,
-    tool_router,
+    tool, tool_router, ErrorData as McpError, RoleServer, ServerHandler, ServiceExt,
 };
 use std::path::PathBuf;
 use std::sync::Arc;
 use tokio::sync::Mutex;
-use vcf::{VcfIndex, format_variant, load_vcf};
+use vcf::{format_variant, load_vcf, VcfIndex};
 
 // CLI arguments
 #[derive(Parser, Debug)]
@@ -90,7 +81,10 @@ impl VcfServer {
     #[tool(description = "Query variants at a specific genomic position")]
     async fn query_by_position(
         &self,
-        Parameters(QueryByPositionParams { chromosome, position }): Parameters<QueryByPositionParams>,
+        Parameters(QueryByPositionParams {
+            chromosome,
+            position,
+        }): Parameters<QueryByPositionParams>,
     ) -> Result<CallToolResult, McpError> {
         let index = self.index.lock().await;
         let (variants, matched_chr) = index.query_by_position(&chromosome, position);
@@ -105,7 +99,10 @@ impl VcfServer {
                 let sample_chroms: Vec<String> = available.iter().take(5).cloned().collect();
 
                 let alternate_suggestion = if chromosome.starts_with("chr") {
-                    chromosome.strip_prefix("chr").unwrap_or(&chromosome).to_string()
+                    chromosome
+                        .strip_prefix("chr")
+                        .unwrap_or(&chromosome)
+                        .to_string()
                 } else {
                     format!("chr{}", chromosome)
                 };
@@ -113,7 +110,11 @@ impl VcfServer {
                 if sample_chroms.is_empty() {
                     format!("No variants found at {}:{}\n\nChromosome '{}' not found in VCF file (no chromosomes available).", chromosome, position, chromosome)
                 } else {
-                    let chr_format = if sample_chroms[0].starts_with("chr") { "chr-prefixed" } else { "numeric" };
+                    let chr_format = if sample_chroms[0].starts_with("chr") {
+                        "chr-prefixed"
+                    } else {
+                        "numeric"
+                    };
                     format!(
                         "No variants found at {}:{}\n\nChromosome '{}' not found in VCF file. Available chromosomes include: {}\n\nNote: This file uses '{}' format. Try using '{}' instead of '{}'.",
                         chromosome, position, chromosome,
@@ -139,7 +140,11 @@ impl VcfServer {
     #[tool(description = "Query variants in a genomic region")]
     async fn query_by_region(
         &self,
-        Parameters(QueryByRegionParams { chromosome, start, end }): Parameters<QueryByRegionParams>,
+        Parameters(QueryByRegionParams {
+            chromosome,
+            start,
+            end,
+        }): Parameters<QueryByRegionParams>,
     ) -> Result<CallToolResult, McpError> {
         let index = self.index.lock().await;
         let (variants, matched_chr) = index.query_by_region(&chromosome, start, end);
@@ -157,7 +162,10 @@ impl VcfServer {
                 let sample_chroms: Vec<String> = available.iter().take(5).cloned().collect();
 
                 let alternate_suggestion = if chromosome.starts_with("chr") {
-                    chromosome.strip_prefix("chr").unwrap_or(&chromosome).to_string()
+                    chromosome
+                        .strip_prefix("chr")
+                        .unwrap_or(&chromosome)
+                        .to_string()
                 } else {
                     format!("chr{}", chromosome)
                 };
@@ -165,7 +173,11 @@ impl VcfServer {
                 if sample_chroms.is_empty() {
                     format!("No variants found in region {}:{}-{}\n\nChromosome '{}' not found in VCF file (no chromosomes available).", chromosome, start, end, chromosome)
                 } else {
-                    let chr_format = if sample_chroms[0].starts_with("chr") { "chr-prefixed" } else { "numeric" };
+                    let chr_format = if sample_chroms[0].starts_with("chr") {
+                        "chr-prefixed"
+                    } else {
+                        "numeric"
+                    };
                     format!(
                         "No variants found in region {}:{}-{}\n\nChromosome '{}' not found in VCF file. Available chromosomes include: {}\n\nNote: This file uses '{}' format. Try using '{}' instead of '{}'.",
                         chromosome, start, end, chromosome,
@@ -258,8 +270,9 @@ impl ServerHandler for VcfServer {
         if request.uri.as_str() == "vcf://metadata" {
             let index = self.index.lock().await;
             let metadata = index.get_metadata();
-            let metadata_json = serde_json::to_string_pretty(&metadata)
-                .map_err(|e| McpError::internal_error(format!("Failed to serialize metadata: {}", e), None))?;
+            let metadata_json = serde_json::to_string_pretty(&metadata).map_err(|e| {
+                McpError::internal_error(format!("Failed to serialize metadata: {}", e), None)
+            })?;
 
             Ok(ReadResourceResult {
                 contents: vec![ResourceContents::TextResourceContents {
@@ -272,7 +285,7 @@ impl ServerHandler for VcfServer {
         } else {
             Err(McpError::resource_not_found(
                 format!("Resource not found: {}", request.uri),
-                None
+                None,
             ))
         }
     }
@@ -294,7 +307,10 @@ impl ServerHandler for VcfServer {
         _: RequestContext<RoleServer>,
     ) -> Result<InitializeResult, McpError> {
         if self.debug {
-            eprintln!("[DEBUG] Initialize request: {}", serde_json::to_string_pretty(&request).unwrap_or_else(|_| format!("{:?}", request)));
+            eprintln!(
+                "[DEBUG] Initialize request: {}",
+                serde_json::to_string_pretty(&request).unwrap_or_else(|_| format!("{:?}", request))
+            );
         }
         Ok(self.get_info())
     }
@@ -316,7 +332,10 @@ impl ServerHandler for VcfServer {
         ctx: RequestContext<RoleServer>,
     ) -> Result<CallToolResult, McpError> {
         if self.debug {
-            eprintln!("[DEBUG] Tool call: {}", serde_json::to_string_pretty(&request).unwrap_or_else(|_| format!("{:?}", request)));
+            eprintln!(
+                "[DEBUG] Tool call: {}",
+                serde_json::to_string_pretty(&request).unwrap_or_else(|_| format!("{:?}", request))
+            );
         }
         let tool_ctx = ToolCallContext::new(self, request, ctx);
         self.tool_router.call(tool_ctx).await
@@ -341,7 +360,10 @@ async fn main() -> std::io::Result<()> {
 
     // Run server with appropriate transport
     if let Some(addr) = args.sse {
-        eprintln!("VCF MCP Server ready. Starting SSE transport on {}...", addr);
+        eprintln!(
+            "VCF MCP Server ready. Starting SSE transport on {}...",
+            addr
+        );
         run_sse_server(server, &addr).await?;
     } else {
         eprintln!("VCF MCP Server ready. Starting stdio transport...");
@@ -362,18 +384,18 @@ async fn main() -> std::io::Result<()> {
 }
 
 async fn run_sse_server(server: VcfServer, addr: &str) -> std::io::Result<()> {
-    use rmcp::transport::streamable_http_server::{
-        StreamableHttpServerConfig, StreamableHttpService,
-        session::local::LocalSessionManager,
-    };
     use axum::{
-        Router,
-        middleware::{self, Next},
         extract::Request,
+        middleware::{self, Next},
         response::Response,
+        Router,
+    };
+    use rmcp::transport::streamable_http_server::{
+        session::local::LocalSessionManager, StreamableHttpServerConfig, StreamableHttpService,
     };
 
-    let bind_addr: std::net::SocketAddr = addr.parse()
+    let bind_addr: std::net::SocketAddr = addr
+        .parse()
         .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidInput, e))?;
 
     let config = StreamableHttpServerConfig {
@@ -384,18 +406,10 @@ async fn run_sse_server(server: VcfServer, addr: &str) -> std::io::Result<()> {
     let session_manager = Arc::new(LocalSessionManager::default());
 
     let debug = server.debug;
-    let service = StreamableHttpService::new(
-        move || Ok(server.clone()),
-        session_manager,
-        config,
-    );
+    let service = StreamableHttpService::new(move || Ok(server.clone()), session_manager, config);
 
     // Logging middleware
-    async fn log_request(
-        req: Request,
-        next: Next,
-        debug: bool,
-    ) -> Response {
+    async fn log_request(req: Request, next: Next, debug: bool) -> Response {
         if debug {
             eprintln!("[DEBUG] HTTP {} {}", req.method(), req.uri());
             eprintln!("[DEBUG] Headers: {:?}", req.headers());
@@ -405,11 +419,16 @@ async fn run_sse_server(server: VcfServer, addr: &str) -> std::io::Result<()> {
 
     let app = Router::new()
         .fallback_service(service)
-        .layer(middleware::from_fn(move |req, next| log_request(req, next, debug)));
+        .layer(middleware::from_fn(move |req, next| {
+            log_request(req, next, debug)
+        }));
 
     let listener = tokio::net::TcpListener::bind(bind_addr).await?;
 
-    eprintln!("Streamable HTTP MCP server listening on http://{}", bind_addr);
+    eprintln!(
+        "Streamable HTTP MCP server listening on http://{}",
+        bind_addr
+    );
 
     axum::serve(listener, app)
         .await

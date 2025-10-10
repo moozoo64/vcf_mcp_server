@@ -1,5 +1,5 @@
 use std::path::PathBuf;
-use vcf_mcp_server::vcf::{load_vcf, format_variant};
+use vcf_mcp_server::vcf::{format_variant, load_vcf};
 
 #[test]
 fn test_load_compressed_vcf() {
@@ -15,7 +15,11 @@ fn test_load_compressed_vcf() {
 
     // Query by position - should find rs6054257 at 20:14370
     let results = index.query_by_position("20", 14370);
-    assert_eq!(results.len(), 1, "Should find exactly one variant at 20:14370");
+    assert_eq!(
+        results.len(),
+        1,
+        "Should find exactly one variant at 20:14370"
+    );
     assert_eq!(results[0].id, "rs6054257");
     assert_eq!(results[0].reference, "G");
     assert_eq!(results[0].alternate, vec!["A"]);
@@ -34,7 +38,11 @@ fn test_query_region_with_real_data() {
 
     // Query region 20:14000-18000 should find variants at 14370 and 17330
     let results = index.query_by_region("20", 14000, 18000);
-    assert_eq!(results.len(), 2, "Should find 2 variants in region 20:14000-18000");
+    assert_eq!(
+        results.len(),
+        2,
+        "Should find 2 variants in region 20:14000-18000"
+    );
 
     // Verify they're in sorted order
     assert_eq!(results[0].position, 14370);
@@ -54,10 +62,18 @@ fn test_query_by_id_with_real_data() {
 
     // Query by rs6040355 - should find variant with multiple alternates
     let results = index.query_by_id("rs6040355");
-    assert_eq!(results.len(), 1, "Should find exactly one variant with ID rs6040355");
+    assert_eq!(
+        results.len(),
+        1,
+        "Should find exactly one variant with ID rs6040355"
+    );
     assert_eq!(results[0].chromosome, "20");
     assert_eq!(results[0].position, 1110696);
-    assert_eq!(results[0].alternate.len(), 2, "rs6040355 should have 2 alternate alleles");
+    assert_eq!(
+        results[0].alternate.len(),
+        2,
+        "rs6040355 should have 2 alternate alleles"
+    );
 }
 
 #[test]
@@ -93,7 +109,10 @@ fn test_load_nonexistent_file() {
     let vcf_path = PathBuf::from("nonexistent.vcf.gz");
     let result = load_vcf(&vcf_path, false, false);
 
-    assert!(result.is_err(), "Loading nonexistent file should return an error");
+    assert!(
+        result.is_err(),
+        "Loading nonexistent file should return an error"
+    );
 }
 
 #[test]
