@@ -7,6 +7,7 @@ use noodles::vcf::variant::record::{AlternateBases, Filters, Ids};
 use std::collections::HashMap;
 use std::fs::File;
 use std::path::PathBuf;
+use std::sync::Mutex;
 
 // In-memory variant record structure
 #[derive(Debug, Clone, serde::Serialize)]
@@ -19,6 +20,34 @@ pub struct VariantRecord {
     pub quality: Option<f32>,
     pub filter: Vec<String>,
     pub info: HashMap<String, serde_json::Value>,
+}
+
+// Data Transfer Object exposed via MCP responses
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct Variant {
+    pub chromosome: String,
+    pub position: u64,
+    pub id: String,
+    pub reference: String,
+    pub alternate: Vec<String>,
+    pub quality: Option<f32>,
+    pub filter: Vec<String>,
+    pub info: HashMap<String, serde_json::Value>,
+}
+
+impl From<VariantRecord> for Variant {
+    fn from(record: VariantRecord) -> Self {
+        Variant {
+            chromosome: record.chromosome,
+            position: record.position,
+            id: record.id,
+            reference: record.reference,
+            alternate: record.alternate,
+            quality: record.quality,
+            filter: record.filter,
+            info: record.info,
+        }
+    }
 }
 
 // VCF metadata structure extracted from header
@@ -36,11 +65,11 @@ pub struct ContigInfo {
 }
 
 // VCF index structure - uses tabix index for efficient queries
-#[derive(Debug)]
 pub struct VcfIndex {
-    vcf_path: PathBuf,
     index: tabix::Index,
     header: vcf::Header,
+    reader: Mutex<vcf::io::Reader<bgzf::io::Reader<File>>>,
+    id_index: HashMap<String, Vec<(String, u64)>>, // ID -> [(chromosome, position)]
 }
 
 impl VcfIndex {
@@ -98,8 +127,9 @@ impl VcfIndex {
     ) -> (Vec<VariantRecord>, Option<String>) {
         // Try to find the matching chromosome format
         if let Some(matching_chr) = self.find_matching_chromosome(chromosome) {
+            let mut reader = self.reader.lock().unwrap();
             let results = query_indexed_region(
-                &self.vcf_path,
+                &mut *reader,
                 &self.index,
                 &self.header,
                 &matching_chr,
@@ -119,8 +149,9 @@ impl VcfIndex {
     ) -> (Vec<VariantRecord>, Option<String>) {
         // Try to find the matching chromosome format
         if let Some(matching_chr) = self.find_matching_chromosome(chromosome) {
+            let mut reader = self.reader.lock().unwrap();
             let results = query_indexed_region(
-                &self.vcf_path,
+                &mut *reader,
                 &self.index,
                 &self.header,
                 &matching_chr,
@@ -133,9 +164,27 @@ impl VcfIndex {
     }
 
     pub fn query_by_id(&self, id: &str) -> Vec<VariantRecord> {
-        // For ID queries, we need to scan all variants (no efficient index for IDs in tabix)
-        // Fall back to full scan
-        query_all_by_id(&self.vcf_path, &self.header, id)
+        // Use the ID index for O(1) lookup
+        if let Some(locations) = self.id_index.get(id) {
+            let mut results = Vec::new();
+            let mut reader = self.reader.lock().unwrap();
+
+            for (chromosome, position) in locations {
+                let variants = query_indexed_region(
+                    &mut *reader,
+                    &self.index,
+                    &self.header,
+                    chromosome,
+                    *position,
+                    *position,
+                );
+                results.extend(variants);
+            }
+
+            results
+        } else {
+            Vec::new()
+        }
     }
 
     pub fn get_metadata(&self) -> VcfMetadata {
@@ -145,7 +194,7 @@ impl VcfIndex {
 
 // Helper function to query indexed VCF by region
 fn query_indexed_region(
-    vcf_path: &PathBuf,
+    reader: &mut vcf::io::Reader<bgzf::io::Reader<File>>,
     index: &tabix::Index,
     header: &vcf::Header,
     chromosome: &str,
@@ -165,14 +214,6 @@ fn query_indexed_region(
     };
     let region = Region::new(chromosome, start_pos..=end_pos);
 
-    // Open VCF file and query
-    let file = match File::open(vcf_path) {
-        Ok(f) => f,
-        Err(_) => return results,
-    };
-
-    let mut reader = vcf::io::Reader::new(bgzf::io::Reader::new(file));
-
     let query_result = match reader.query(header, index, &region) {
         Ok(q) => q,
         Err(_) => return results,
@@ -187,30 +228,6 @@ fn query_indexed_region(
     results
 }
 
-// Helper function to query all variants by ID (full scan)
-fn query_all_by_id(vcf_path: &PathBuf, header: &vcf::Header, id: &str) -> Vec<VariantRecord> {
-    let mut results = Vec::new();
-
-    let file = match File::open(vcf_path) {
-        Ok(f) => f,
-        Err(_) => return results,
-    };
-
-    let mut reader = vcf::io::Reader::new(bgzf::io::Reader::new(file));
-
-    // Skip header (we already have it)
-    let _ = reader.read_header();
-
-    for record in reader.records().flatten() {
-        if let Ok(variant) = parse_variant_record(&record, header) {
-            if variant.id == id {
-                results.push(variant);
-            }
-        }
-    }
-
-    results
-}
 
 // Helper function to extract metadata from VCF header
 fn extract_metadata(header: &vcf::Header) -> VcfMetadata {
@@ -378,6 +395,110 @@ fn parse_variant_record(
     })
 }
 
+// Helper function to save ID index to disk
+fn save_id_index_to_disk(
+    id_index: &HashMap<String, Vec<(String, u64)>>,
+    idx_path: &PathBuf,
+    debug: bool,
+) -> std::io::Result<()> {
+    use std::fs;
+    use std::io::Write;
+
+    // Create temporary file with .tmp extension
+    let tmp_path = PathBuf::from(format!("{}.tmp", idx_path.display()));
+
+    if debug {
+        eprintln!("Writing ID index to temporary file: {}", tmp_path.display());
+    }
+
+    // Serialize and write to temp file
+    {
+        let encoded = bincode::serialize(id_index)
+            .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))?;
+        let mut tmp_file = fs::File::create(&tmp_path)?;
+        tmp_file.write_all(&encoded)?;
+    }
+
+    // Check if .idx file was created by another process (race condition)
+    if idx_path.exists() {
+        if debug {
+            eprintln!("ID index file appeared during write, removing temporary file");
+        }
+        fs::remove_file(&tmp_path)?;
+        return Ok(());
+    }
+
+    // Atomically rename temp file to final .idx file
+    fs::rename(&tmp_path, idx_path)?;
+
+    Ok(())
+}
+
+// Helper function to load ID index from disk
+fn load_id_index_from_disk(
+    idx_path: &PathBuf,
+    debug: bool,
+) -> std::io::Result<HashMap<String, Vec<(String, u64)>>> {
+    use std::fs;
+    use std::io::Read;
+
+    if debug {
+        eprintln!("Loading ID index from: {}", idx_path.display());
+    }
+
+    let mut file = fs::File::open(idx_path)?;
+    let mut buffer = Vec::new();
+    file.read_to_end(&mut buffer)?;
+
+    let id_index: HashMap<String, Vec<(String, u64)>> = bincode::deserialize(&buffer)
+        .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))?;
+
+    Ok(id_index)
+}
+
+// Helper function to build ID index by scanning all variants
+fn build_id_index(
+    path: &PathBuf,
+    header: &vcf::Header,
+    debug: bool,
+) -> std::io::Result<HashMap<String, Vec<(String, u64)>>> {
+    let mut id_index: HashMap<String, Vec<(String, u64)>> = HashMap::new();
+
+    if debug {
+        eprintln!("Building ID index...");
+    }
+
+    let file = File::open(path)?;
+    let mut reader = vcf::io::Reader::new(bgzf::io::Reader::new(file));
+    let _ = reader.read_header()?; // Skip header
+
+    let mut count = 0;
+    for record in reader.records().flatten() {
+        if let Ok(variant) = parse_variant_record(&record, header) {
+            // Skip "." (missing ID)
+            if variant.id != "." {
+                id_index
+                    .entry(variant.id.clone())
+                    .or_insert_with(Vec::new)
+                    .push((variant.chromosome.clone(), variant.position));
+            }
+            count += 1;
+        }
+    }
+
+    if debug {
+        eprintln!(
+            "ID index built: {} variants scanned, {} unique IDs indexed",
+            count,
+            id_index.len()
+        );
+    } else {
+        eprintln!("ID index built ({} unique IDs)", id_index.len());
+    }
+
+    Ok(id_index)
+}
+
 // Load and index VCF file
 pub fn load_vcf(path: &PathBuf, debug: bool, save_index: bool) -> std::io::Result<VcfIndex> {
     // Check if a .tbi index file exists
@@ -412,16 +533,71 @@ pub fn load_vcf(path: &PathBuf, debug: bool, save_index: bool) -> std::io::Resul
         index
     };
 
-    // Read header only
-    let mut vcf_reader = vcf::io::reader::Builder::default().build_from_path(path)?;
-    let header = vcf_reader.read_header()?;
+    // Create reader for queries
+    let file = File::open(path)?;
+    let mut reader = vcf::io::Reader::new(bgzf::io::Reader::new(file));
+    let header = reader.read_header()?;
+
+    // Check if ID index file exists
+    let idx_path = PathBuf::from(format!("{}.idx", path.display()));
+
+    let id_index = if idx_path.exists() {
+        // Load existing ID index
+        if debug {
+            eprintln!("Found ID index: {}", idx_path.display());
+        }
+        eprintln!("Loading VCF file with existing ID index...");
+        match load_id_index_from_disk(&idx_path, debug) {
+            Ok(index) => {
+                eprintln!("ID index loaded ({} unique IDs)", index.len());
+                index
+            }
+            Err(e) => {
+                eprintln!("Warning: Failed to load ID index: {}", e);
+                eprintln!("Rebuilding ID index...");
+                let index = build_id_index(path, &header, debug)?;
+
+                // Try to save the rebuilt index
+                if save_index {
+                    match save_id_index_to_disk(&index, &idx_path, debug) {
+                        Ok(()) => eprintln!("ID index saved to {}", idx_path.display()),
+                        Err(e) => {
+                            eprintln!("Warning: Failed to save ID index: {}", e);
+                            eprintln!("Continuing with in-memory index...");
+                        }
+                    }
+                }
+
+                index
+            }
+        }
+    } else {
+        // Build ID index from scratch
+        let index = build_id_index(path, &header, debug)?;
+
+        // Try to save index to disk if requested
+        if save_index {
+            match save_id_index_to_disk(&index, &idx_path, debug) {
+                Ok(()) => eprintln!("ID index saved to {}", idx_path.display()),
+                Err(e) => {
+                    eprintln!("Warning: Failed to save ID index to disk: {}", e);
+                    eprintln!("Continuing with in-memory index...");
+                }
+            }
+        } else if debug {
+            eprintln!("Skipping ID index save (--never-save-index flag set)");
+        }
+
+        index
+    };
 
     eprintln!("VCF loaded (indexed mode)");
 
     Ok(VcfIndex {
-        vcf_path: path.clone(),
         index: tabix_index,
         header,
+        reader: Mutex::new(reader),
+        id_index,
     })
 }
 
@@ -463,9 +639,9 @@ fn save_index_to_disk(
     Ok(())
 }
 
-// Format variant as JSON string
-pub fn format_variant(variant: &VariantRecord) -> String {
-    serde_json::to_string(variant).unwrap_or_else(|_| "{}".to_string())
+// Convert a VariantRecord into the public Variant DTO
+pub fn format_variant(variant: VariantRecord) -> Variant {
+    Variant::from(variant)
 }
 
 #[cfg(test)]
@@ -504,34 +680,34 @@ mod tests {
     #[test]
     fn test_format_variant_basic() {
         let variant = create_test_variant("20", 14370, "rs6054257", "G", vec!["A"]);
-        let json = format_variant(&variant);
+        let dto = format_variant(variant.clone());
 
-        assert!(json.contains(r#""chromosome":"20""#));
-        assert!(json.contains(r#""position":14370"#));
-        assert!(json.contains(r#""id":"rs6054257""#));
-        assert!(json.contains(r#""reference":"G""#));
-        assert!(json.contains(r#""alternate":["A"]"#));
-        assert!(json.contains(r#""quality":29"#));
-        assert!(json.contains(r#""filter":["PASS"]"#));
-        assert!(json.contains(r#""NS":3"#));
-        assert!(json.contains(r#""DP":14"#));
-        assert!(json.contains(r#""AF":0.5"#));
+        assert_eq!(dto.chromosome, "20");
+        assert_eq!(dto.position, 14370);
+        assert_eq!(dto.id, "rs6054257");
+        assert_eq!(dto.reference, "G");
+        assert_eq!(dto.alternate, vec!["A"]);
+        assert_eq!(dto.quality, Some(29.0));
+        assert_eq!(dto.filter, vec!["PASS"]);
+        assert_eq!(dto.info.get("NS"), Some(&serde_json::json!(3)));
+        assert_eq!(dto.info.get("DP"), Some(&serde_json::json!(14)));
+        assert_eq!(dto.info.get("AF"), Some(&serde_json::json!(0.5)));
     }
 
     #[test]
     fn test_format_variant_multiple_alternates() {
         let variant = create_test_variant("20", 1110696, "rs6040355", "A", vec!["G", "T"]);
-        let json = format_variant(&variant);
+        let dto = format_variant(variant.clone());
 
-        assert!(json.contains(r#""alternate":["G","T"]"#));
+        assert_eq!(dto.alternate, vec!["G", "T"]);
     }
 
     #[test]
     fn test_format_variant_no_quality() {
         let mut variant = create_test_variant("20", 14370, "rs6054257", "G", vec!["A"]);
         variant.quality = None;
-        let json = format_variant(&variant);
+        let dto = format_variant(variant);
 
-        assert!(json.contains(r#""quality":null"#));
+        assert!(dto.quality.is_none());
     }
 }

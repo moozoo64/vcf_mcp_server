@@ -3,3 +3,7 @@
 
 # Log files
 *.log
+
+# VCF index files
+*.tbi
+*.idx

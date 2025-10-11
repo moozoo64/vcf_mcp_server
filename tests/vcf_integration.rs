@@ -90,18 +90,16 @@ fn test_format_variant_with_real_data() {
 
     assert!(!results.is_empty(), "Should find variant at 20:14370");
 
-    let json = format_variant(&results[0]);
+    let dto = format_variant(results[0].clone());
 
-    // Verify JSON contains expected fields
-    assert!(json.contains(r#""chromosome":"20""#));
-    assert!(json.contains(r#""position":14370"#));
-    assert!(json.contains(r#""id":"rs6054257""#));
-    assert!(json.contains(r#""reference":"G""#));
-    assert!(json.contains(r#""alternate":["A"]"#));
-    // Filter is now an array
-    assert!(json.contains(r#""filter":"#));
-    // Info is now a structured object
-    assert!(json.contains(r#""info":"#));
+    // Verify DTO contains expected fields
+    assert_eq!(dto.chromosome, "20");
+    assert_eq!(dto.position, 14370);
+    assert_eq!(dto.id, "rs6054257");
+    assert_eq!(dto.reference, "G");
+    assert_eq!(dto.alternate, vec!["A"]);
+    assert_eq!(dto.filter, vec!["PASS"]);
+    assert!(dto.info.contains_key("NS"));
 }
 
 #[test]
