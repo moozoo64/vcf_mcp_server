@@ -10,8 +10,9 @@ It is not intended to serve up multiple VCF files at once. It is designed to be 
 
 - Rust 1.70 or later
 
-## Installation
+## Build
 
+You want to build in release mode for optimal performance:
 ```bash
 cargo build --release
 ```
