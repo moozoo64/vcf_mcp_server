@@ -147,3 +147,114 @@ fn test_microsat_variant() {
     assert_eq!(results[0].chromosome, "20");
     assert_eq!(results[0].position, 1234567);
 }
+
+#[test]
+fn test_chromosome_variant_matching_with_chr_prefix() {
+    let vcf_path = PathBuf::from("sample_data/sample.compressed.vcf.gz");
+
+    if !vcf_path.exists() {
+        eprintln!("Warning: Sample VCF file not found, skipping test");
+        return;
+    }
+
+    let index = load_vcf(&vcf_path, false, false).expect("Failed to load VCF file");
+
+    // VCF file uses "20" (without chr prefix)
+    // Query with "chr20" should still find variants through variant matching
+    let (results_with_chr, matched_chr) = index.query_by_position("chr20", 14370);
+    assert_eq!(
+        results_with_chr.len(),
+        1,
+        "Should find variant when querying chr20"
+    );
+    assert_eq!(results_with_chr[0].id, "rs6054257");
+    assert_eq!(
+        matched_chr,
+        Some("20".to_string()),
+        "Should match to chromosome 20"
+    );
+
+    // Verify we get the same results with and without prefix
+    let (results_without_chr, _) = index.query_by_position("20", 14370);
+    assert_eq!(
+        results_with_chr.len(),
+        results_without_chr.len(),
+        "Should get same results with or without chr prefix"
+    );
+    assert_eq!(
+        results_with_chr[0].id, results_without_chr[0].id,
+        "Should find same variant"
+    );
+}
+
+#[test]
+fn test_chromosome_variant_matching_chrx() {
+    let vcf_path = PathBuf::from("sample_data/sample.compressed.vcf.gz");
+
+    if !vcf_path.exists() {
+        eprintln!("Warning: Sample VCF file not found, skipping test");
+        return;
+    }
+
+    let index = load_vcf(&vcf_path, false, false).expect("Failed to load VCF file");
+
+    // Query X chromosome with chr prefix
+    let (results_with_chr, matched_chr) = index.query_by_position("chrX", 10);
+    assert_eq!(
+        results_with_chr.len(),
+        1,
+        "Should find variant when querying chrX"
+    );
+    assert_eq!(results_with_chr[0].id, "rsTest");
+    assert_eq!(
+        matched_chr,
+        Some("X".to_string()),
+        "Should match to chromosome X"
+    );
+}
+
+#[test]
+fn test_chromosome_not_found_returns_none() {
+    let vcf_path = PathBuf::from("sample_data/sample.compressed.vcf.gz");
+
+    if !vcf_path.exists() {
+        eprintln!("Warning: Sample VCF file not found, skipping test");
+        return;
+    }
+
+    let index = load_vcf(&vcf_path, false, false).expect("Failed to load VCF file");
+
+    // Query non-existent chromosome
+    let (results, matched_chr) = index.query_by_position("99", 12345);
+    assert_eq!(results.len(), 0, "Should find no variants");
+    assert_eq!(matched_chr, None, "Should return None for matched chromosome");
+
+    // Verify available chromosomes list is not empty
+    let available = index.get_available_chromosomes();
+    assert!(!available.is_empty(), "Should have available chromosomes");
+}
+
+#[test]
+fn test_query_by_region_with_chr_prefix() {
+    let vcf_path = PathBuf::from("sample_data/sample.compressed.vcf.gz");
+
+    if !vcf_path.exists() {
+        eprintln!("Warning: Sample VCF file not found, skipping test");
+        return;
+    }
+
+    let index = load_vcf(&vcf_path, false, false).expect("Failed to load VCF file");
+
+    // Query region with chr prefix
+    let (results, matched_chr) = index.query_by_region("chr20", 14000, 18000);
+    assert_eq!(
+        results.len(),
+        2,
+        "Should find 2 variants in region chr20:14000-18000"
+    );
+    assert_eq!(
+        matched_chr,
+        Some("20".to_string()),
+        "Should match to chromosome 20"
+    );
+}

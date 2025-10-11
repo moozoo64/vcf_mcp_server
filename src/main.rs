@@ -512,3 +512,79 @@ async fn run_sse_server(server: VcfServer, addr: &str) -> std::io::Result<()> {
         .await
         .map_err(std::io::Error::other)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn create_test_index() -> VcfIndex {
+        let vcf_path = PathBuf::from("sample_data/sample.compressed.vcf.gz");
+        load_vcf(&vcf_path, false, false).expect("Failed to load test VCF")
+    }
+
+    #[test]
+    fn test_build_chromosome_response_when_matched() {
+        let index = create_test_index();
+        let matched_chr = Some("20".to_string());
+
+        let (status, available, alternate) =
+            build_chromosome_response(&index, "20", &matched_chr);
+
+        assert!(matches!(status, QueryStatus::Ok));
+        assert_eq!(available, None);
+        assert_eq!(alternate, None);
+    }
+
+    #[test]
+    fn test_build_chromosome_response_when_not_found() {
+        let index = create_test_index();
+        let matched_chr = None;
+
+        let (status, available, alternate) =
+            build_chromosome_response(&index, "99", &matched_chr);
+
+        assert!(matches!(status, QueryStatus::ChromosomeNotFound));
+        assert!(available.is_some());
+        assert!(alternate.is_some());
+        assert_eq!(alternate, Some("chr99".to_string()));
+    }
+
+    #[test]
+    fn test_build_chromosome_response_suggests_without_chr_prefix() {
+        let index = create_test_index();
+        let matched_chr = None;
+
+        let (status, available, alternate) =
+            build_chromosome_response(&index, "chr99", &matched_chr);
+
+        assert!(matches!(status, QueryStatus::ChromosomeNotFound));
+        assert!(available.is_some());
+        assert_eq!(alternate, Some("99".to_string()));
+    }
+
+    #[test]
+    fn test_build_chromosome_response_suggests_with_chr_prefix() {
+        let index = create_test_index();
+        let matched_chr = None;
+
+        let (status, _available, alternate) =
+            build_chromosome_response(&index, "99", &matched_chr);
+
+        assert!(matches!(status, QueryStatus::ChromosomeNotFound));
+        assert_eq!(alternate, Some("chr99".to_string()));
+    }
+
+    #[test]
+    fn test_build_chromosome_response_includes_sample_chromosomes() {
+        let index = create_test_index();
+        let matched_chr = None;
+
+        let (_status, available, _alternate) =
+            build_chromosome_response(&index, "99", &matched_chr);
+
+        assert!(available.is_some());
+        let chroms = available.unwrap();
+        assert!(!chroms.is_empty());
+        assert!(chroms.len() <= 5, "Should limit to 5 chromosomes");
+    }
+}
