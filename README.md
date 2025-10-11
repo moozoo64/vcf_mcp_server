@@ -119,7 +119,17 @@ cargo run
 cargo test
 cargo fmt
 cargo clippy
+cargo bench  # Run performance benchmarks
 ```
+
+## Test Data
+
+Sample VCF files in the `sample_data/` directory are provided for testing and demonstration:
+
+- **VCFlib samples** - Small test files from the VCFlib project (MIT License)
+- **1000 Genomes Project data** - Subset of high-coverage sequencing data (CC BY-NC-SA 3.0)
+
+See [sample_data/README.md](sample_data/README.md) for complete attribution and licensing information.
 
 ## License
 
