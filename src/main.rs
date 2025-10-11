@@ -153,24 +153,24 @@ impl VcfServer {
             position,
         };
 
-        let index = self.index.lock().await;
-        let (variants, matched_chr) = index.query_by_position(&requested_chromosome, position);
-        let count = variants.len();
-        let items: Vec<Variant> = variants.into_iter().map(format_variant).collect();
-        let result = QueryResult { count, items };
+        let response = {
+            let index = self.index.lock().await;
+            let (variants, matched_chr) = index.query_by_position(&requested_chromosome, position);
+            let count = variants.len();
+            let items: Vec<Variant> = variants.into_iter().map(format_variant).collect();
+            let result = QueryResult { count, items };
 
-        let (status, available_sample, alternate_suggestion) =
-            build_chromosome_response(&index, &requested_chromosome, &matched_chr);
+            let (status, available_sample, alternate_suggestion) =
+                build_chromosome_response(&index, &requested_chromosome, &matched_chr);
 
-        drop(index);
-
-        let response = QueryByPositionResponse {
-            status,
-            query: query_context,
-            matched_chromosome: matched_chr,
-            available_chromosomes_sample: available_sample,
-            alternate_chromosome_suggestion: alternate_suggestion,
-            result,
+            QueryByPositionResponse {
+                status,
+                query: query_context,
+                matched_chromosome: matched_chr,
+                available_chromosomes_sample: available_sample,
+                alternate_chromosome_suggestion: alternate_suggestion,
+                result,
+            }
         };
 
         let payload = serde_json::to_value(response).map_err(|e| {
@@ -200,24 +200,24 @@ impl VcfServer {
             end,
         };
 
-        let index = self.index.lock().await;
-        let (variants, matched_chr) = index.query_by_region(&requested_chromosome, start, end);
-        let count = variants.len();
-        let items: Vec<Variant> = variants.into_iter().map(format_variant).collect();
-        let result = QueryResult { count, items };
+        let response = {
+            let index = self.index.lock().await;
+            let (variants, matched_chr) = index.query_by_region(&requested_chromosome, start, end);
+            let count = variants.len();
+            let items: Vec<Variant> = variants.into_iter().map(format_variant).collect();
+            let result = QueryResult { count, items };
 
-        let (status, available_sample, alternate_suggestion) =
-            build_chromosome_response(&index, &requested_chromosome, &matched_chr);
+            let (status, available_sample, alternate_suggestion) =
+                build_chromosome_response(&index, &requested_chromosome, &matched_chr);
 
-        drop(index);
-
-        let response = QueryByRegionResponse {
-            status,
-            query: query_context,
-            matched_chromosome: matched_chr,
-            available_chromosomes_sample: available_sample,
-            alternate_chromosome_suggestion: alternate_suggestion,
-            result,
+            QueryByRegionResponse {
+                status,
+                query: query_context,
+                matched_chromosome: matched_chr,
+                available_chromosomes_sample: available_sample,
+                alternate_chromosome_suggestion: alternate_suggestion,
+                result,
+            }
         };
 
         let payload = serde_json::to_value(response).map_err(|e| {
@@ -237,24 +237,27 @@ impl VcfServer {
         &self,
         Parameters(QueryByIdParams { id: requested_id }): Parameters<QueryByIdParams>,
     ) -> Result<CallToolResult, McpError> {
-        let index = self.index.lock().await;
-        let variants = index.query_by_id(&requested_id);
-        drop(index);
+        let response = {
+            let index = self.index.lock().await;
+            let variants = index.query_by_id(&requested_id);
 
-        let count = variants.len();
-        let items: Vec<Variant> = variants.into_iter().map(format_variant).collect();
-        let result = QueryResult { count, items };
+            let count = variants.len();
+            let items: Vec<Variant> = variants.into_iter().map(format_variant).collect();
+            let result = QueryResult { count, items };
 
-        let status = if result.count > 0 {
-            QueryStatus::Ok
-        } else {
-            QueryStatus::NotFound
-        };
+            let status = if result.count > 0 {
+                QueryStatus::Ok
+            } else {
+                QueryStatus::NotFound
+            };
 
-        let response = QueryByIdResponse {
-            status,
-            query: IdQuery { id: requested_id },
-            result,
+            QueryByIdResponse {
+                status,
+                query: IdQuery {
+                    id: requested_id.clone(),
+                },
+                result,
+            }
         };
 
         let payload = serde_json::to_value(response).map_err(|e| {

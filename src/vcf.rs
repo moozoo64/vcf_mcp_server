@@ -9,20 +9,7 @@ use std::fs::File;
 use std::path::PathBuf;
 use std::sync::Mutex;
 
-// In-memory variant record structure
-#[derive(Debug, Clone, serde::Serialize)]
-pub struct VariantRecord {
-    pub chromosome: String,
-    pub position: u64,
-    pub id: String,
-    pub reference: String,
-    pub alternate: Vec<String>,
-    pub quality: Option<f32>,
-    pub filter: Vec<String>,
-    pub info: HashMap<String, serde_json::Value>,
-}
-
-// Data Transfer Object exposed via MCP responses
+// Variant structure - used both internally and exposed via MCP responses
 #[derive(Debug, Clone, serde::Serialize)]
 pub struct Variant {
     pub chromosome: String,
@@ -33,21 +20,6 @@ pub struct Variant {
     pub quality: Option<f32>,
     pub filter: Vec<String>,
     pub info: HashMap<String, serde_json::Value>,
-}
-
-impl From<VariantRecord> for Variant {
-    fn from(record: VariantRecord) -> Self {
-        Variant {
-            chromosome: record.chromosome,
-            position: record.position,
-            id: record.id,
-            reference: record.reference,
-            alternate: record.alternate,
-            quality: record.quality,
-            filter: record.filter,
-            info: record.info,
-        }
-    }
 }
 
 // VCF metadata structure extracted from header
@@ -124,7 +96,7 @@ impl VcfIndex {
         &self,
         chromosome: &str,
         position: u64,
-    ) -> (Vec<VariantRecord>, Option<String>) {
+    ) -> (Vec<Variant>, Option<String>) {
         // Try to find the matching chromosome format
         if let Some(matching_chr) = self.find_matching_chromosome(chromosome) {
             let mut reader = self.reader.lock().unwrap();
@@ -146,7 +118,7 @@ impl VcfIndex {
         chromosome: &str,
         start: u64,
         end: u64,
-    ) -> (Vec<VariantRecord>, Option<String>) {
+    ) -> (Vec<Variant>, Option<String>) {
         // Try to find the matching chromosome format
         if let Some(matching_chr) = self.find_matching_chromosome(chromosome) {
             let mut reader = self.reader.lock().unwrap();
@@ -163,7 +135,7 @@ impl VcfIndex {
         (Vec::new(), None)
     }
 
-    pub fn query_by_id(&self, id: &str) -> Vec<VariantRecord> {
+    pub fn query_by_id(&self, id: &str) -> Vec<Variant> {
         // Use the ID index for O(1) lookup
         if let Some(locations) = self.id_index.get(id) {
             let mut results = Vec::new();
@@ -200,7 +172,7 @@ fn query_indexed_region(
     chromosome: &str,
     start: u64,
     end: u64,
-) -> Vec<VariantRecord> {
+) -> Vec<Variant> {
     let mut results = Vec::new();
 
     // Create region with Position types
@@ -339,12 +311,12 @@ fn convert_info_value(debug_str: &str) -> serde_json::Value {
     serde_json::Value::String(s.to_string())
 }
 
-// Helper function to parse a VCF record into a VariantRecord
+// Helper function to parse a VCF record into a Variant
 fn parse_variant_record(
     record: &vcf::Record,
     header: &vcf::Header,
-) -> std::io::Result<VariantRecord> {
-    Ok(VariantRecord {
+) -> std::io::Result<Variant> {
+    Ok(Variant {
         chromosome: record.reference_sequence_name().to_string(),
         position: usize::from(
             record
@@ -639,9 +611,9 @@ fn save_index_to_disk(
     Ok(())
 }
 
-// Convert a VariantRecord into the public Variant DTO
-pub fn format_variant(variant: VariantRecord) -> Variant {
-    Variant::from(variant)
+// Format variant for MCP response (no-op now that types are unified)
+pub fn format_variant(variant: Variant) -> Variant {
+    variant
 }
 
 #[cfg(test)]
@@ -654,7 +626,7 @@ mod tests {
         id: &str,
         reference: &str,
         alternate: Vec<&str>,
-    ) -> VariantRecord {
+    ) -> Variant {
         let mut info = HashMap::new();
         info.insert("NS".to_string(), serde_json::Value::Number(3.into()));
         info.insert("DP".to_string(), serde_json::Value::Number(14.into()));
@@ -665,7 +637,7 @@ mod tests {
                 .unwrap(),
         );
 
-        VariantRecord {
+        Variant {
             chromosome: chromosome.to_string(),
             position,
             id: id.to_string(),
