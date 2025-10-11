@@ -129,7 +129,7 @@ impl VcfIndex {
         if let Some(matching_chr) = self.find_matching_chromosome(chromosome) {
             let mut reader = self.reader.lock().unwrap();
             let results = query_indexed_region(
-                &mut *reader,
+                &mut reader,
                 &self.index,
                 &self.header,
                 &matching_chr,
@@ -151,7 +151,7 @@ impl VcfIndex {
         if let Some(matching_chr) = self.find_matching_chromosome(chromosome) {
             let mut reader = self.reader.lock().unwrap();
             let results = query_indexed_region(
-                &mut *reader,
+                &mut reader,
                 &self.index,
                 &self.header,
                 &matching_chr,
@@ -171,7 +171,7 @@ impl VcfIndex {
 
             for (chromosome, position) in locations {
                 let variants = query_indexed_region(
-                    &mut *reader,
+                    &mut reader,
                     &self.index,
                     &self.header,
                     chromosome,
@@ -479,7 +479,7 @@ fn build_id_index(
             if variant.id != "." {
                 id_index
                     .entry(variant.id.clone())
-                    .or_insert_with(Vec::new)
+                    .or_default()
                     .push((variant.chromosome.clone(), variant.position));
             }
             count += 1;

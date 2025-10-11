@@ -2,7 +2,9 @@
 
 ## Overview
 
-This is an MCP server that exposes VCF (Variant Calling Format) files to LLMs for genomic variant analysis. The server provides tools to query variants by genomic position, region, or variant ID.
+This is an MCP server that exposes a VCF (Variant Calling Format) file to LLMs for genomic variant analysis. The server provides tools to query variants by genomic position, region, or variant ID.
+
+It is not intended to serve up multiple VCF files at once. It is designed to be used with a single VCF file in a desktop or confidential compute VM setting.
 
 ## Prerequisites
 

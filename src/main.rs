@@ -159,29 +159,8 @@ impl VcfServer {
         let items: Vec<Variant> = variants.into_iter().map(format_variant).collect();
         let result = QueryResult { count, items };
 
-        let (status, available_sample, alternate_suggestion) = match matched_chr.clone() {
-            Some(_) => (QueryStatus::Ok, None, None),
-            None => {
-                let sample_chroms: Vec<String> = index
-                    .get_available_chromosomes()
-                    .into_iter()
-                    .take(5)
-                    .collect();
-                let alternate = if requested_chromosome.starts_with("chr") {
-                    requested_chromosome
-                        .strip_prefix("chr")
-                        .unwrap_or(requested_chromosome.as_str())
-                        .to_string()
-                } else {
-                    format!("chr{}", requested_chromosome.as_str())
-                };
-                (
-                    QueryStatus::ChromosomeNotFound,
-                    Some(sample_chroms),
-                    Some(alternate),
-                )
-            }
-        };
+        let (status, available_sample, alternate_suggestion) =
+            build_chromosome_response(&index, &requested_chromosome, &matched_chr);
 
         drop(index);
 
@@ -227,29 +206,8 @@ impl VcfServer {
         let items: Vec<Variant> = variants.into_iter().map(format_variant).collect();
         let result = QueryResult { count, items };
 
-        let (status, available_sample, alternate_suggestion) = match matched_chr.clone() {
-            Some(_) => (QueryStatus::Ok, None, None),
-            None => {
-                let sample_chroms: Vec<String> = index
-                    .get_available_chromosomes()
-                    .into_iter()
-                    .take(5)
-                    .collect();
-                let alternate = if requested_chromosome.starts_with("chr") {
-                    requested_chromosome
-                        .strip_prefix("chr")
-                        .unwrap_or(requested_chromosome.as_str())
-                        .to_string()
-                } else {
-                    format!("chr{}", requested_chromosome.as_str())
-                };
-                (
-                    QueryStatus::ChromosomeNotFound,
-                    Some(sample_chroms),
-                    Some(alternate),
-                )
-            }
-        };
+        let (status, available_sample, alternate_suggestion) =
+            build_chromosome_response(&index, &requested_chromosome, &matched_chr);
 
         drop(index);
 
@@ -309,6 +267,37 @@ impl VcfServer {
         let content = Content::json(payload)?;
 
         Ok(CallToolResult::success(vec![content]))
+    }
+}
+
+// Helper function to build chromosome match response metadata
+fn build_chromosome_response(
+    index: &VcfIndex,
+    requested_chromosome: &str,
+    matched_chr: &Option<String>,
+) -> (QueryStatus, Option<Vec<String>>, Option<String>) {
+    match matched_chr {
+        Some(_) => (QueryStatus::Ok, None, None),
+        None => {
+            let sample_chroms: Vec<String> = index
+                .get_available_chromosomes()
+                .into_iter()
+                .take(5)
+                .collect();
+            let alternate = if requested_chromosome.starts_with("chr") {
+                requested_chromosome
+                    .strip_prefix("chr")
+                    .unwrap_or(requested_chromosome)
+                    .to_string()
+            } else {
+                format!("chr{}", requested_chromosome)
+            };
+            (
+                QueryStatus::ChromosomeNotFound,
+                Some(sample_chroms),
+                Some(alternate),
+            )
+        }
     }
 }
 

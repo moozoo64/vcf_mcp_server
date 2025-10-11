@@ -17,3 +17,10 @@ hyper = { version = "1", features = ["server", "http1"] }
 hyper-util = { version = "0.1", features = ["tokio", "server", "server-auto"] }
 axum = "0.8"
 anyhow = "1"
+
+[dev-dependencies]
+criterion = "0.5"
+
+[[bench]]
+name = "vcf_queries"
+harness = false
