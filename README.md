@@ -23,11 +23,11 @@ The binary will be at `./target/release/vcf_mcp_server`
 ## Usage
 
 * stdio transport: ```./target/release/vcf_mcp_server sample_data/sample.compressed.vcf.gz```
-* HTTP/SSE transport: ```./target/release/vcf_mcp_server sample_data/sample.compressed.vcf.gz --sse 0.0.0.0:8090```
+* HTTP/SSE transport: ```./target/release/vcf_mcp_server sample_data/sample.compressed.vcf.gz --sse 127.0.0.1:8090```
 
 ### Options
 
-- `--sse <ADDR:PORT>` - Run HTTP server on specified address (e.g., 0.0.0.0:8090)
+- `--sse <ADDR:PORT>` - Run HTTP server on specified address (e.g., 127.0.0.1:8090)
 - `--debug` - Enable debug logging
 - `--never-save-index` - Never save the built tabix index to disk (for read-only/ephemeral environments)
 

@@ -21,7 +21,7 @@ struct Args {
     /// Path to the VCF file
     vcf_file: PathBuf,
 
-    /// Run HTTP server on specified address (e.g., 0.0.0.0:8090)
+    /// Run HTTP server on specified address (e.g., 127.0.0.1:8090)
     #[arg(long, value_name = "ADDR:PORT")]
     sse: Option<String>,
 
