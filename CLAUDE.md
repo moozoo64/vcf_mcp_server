@@ -82,3 +82,7 @@ The MCP protocol allows LLMs to query genomic variants by:
 - Variant ID
 
 This enables LLMs to perform analysis on genomic variation data without needing to understand the VCF file format directly.
+
+## Constraints
+* Filenames starting with NG1Q can be used in ad-hoc tests. Any unit/integration tests or benchmarks must use data from the `sample_data` directory.
+* Always use stderr when logging or printing debug information.
