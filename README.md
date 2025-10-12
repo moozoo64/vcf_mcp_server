@@ -1,5 +1,5 @@
 # VCF MCP Server: Exposing Variant Calling Format files to LLMs for Analysis
-_No warranty express or implied. This was totally vibe-coded while chronicly sleep-deprived and watching Bluey and Tremors 5. Use at your own risk. AFAICT it works and outputs line up with what I get through traditional tools.
+_No warranty express or implied. This was totally vibe-coded while chronicly sleep-deprived and watching Bluey and Tremors 5._ Use at your own risk. AFAICT it works and outputs line up with what I get through traditional tools.
 
 ## Overview
 
