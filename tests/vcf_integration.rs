@@ -1,5 +1,5 @@
 use std::path::PathBuf;
-use vcf_mcp_server::vcf::{format_variant, load_vcf};
+use vcf_mcp_server::vcf::{format_variant, load_vcf, ReferenceGenomeSource};
 
 #[test]
 fn test_load_compressed_vcf() {
@@ -256,5 +256,90 @@ fn test_query_by_region_with_chr_prefix() {
         matched_chr,
         Some("20".to_string()),
         "Should match to chromosome 20"
+    );
+}
+
+#[test]
+fn test_reference_genome_extraction_from_header() {
+    let vcf_path = PathBuf::from("sample_data/sample.compressed.vcf.gz");
+
+    if !vcf_path.exists() {
+        eprintln!("Warning: Sample VCF file not found, skipping test");
+        return;
+    }
+
+    let index = load_vcf(&vcf_path, false, false).expect("Failed to load VCF file");
+    let metadata = index.get_metadata();
+
+    // sample.compressed.vcf.gz has ##reference=1000GenomesPilot-NCBI36
+    assert_eq!(
+        metadata.reference_genome.build,
+        "1000GenomesPilot-NCBI36",
+        "Should extract reference from ##reference header line"
+    );
+    assert!(
+        matches!(
+            metadata.reference_genome.source,
+            ReferenceGenomeSource::HeaderLine
+        ),
+        "Source should be HeaderLine"
+    );
+}
+
+#[test]
+fn test_reference_genome_extraction_from_hg38() {
+    let vcf_path = PathBuf::from("NG1QY7GX8H.vcf.gz");
+
+    if !vcf_path.exists() {
+        eprintln!("Warning: NG1QY7GX8H.vcf.gz not found, skipping test");
+        return;
+    }
+
+    let index = load_vcf(&vcf_path, false, false).expect("Failed to load VCF file");
+    let metadata = index.get_metadata();
+
+    // NG1QY7GX8H.vcf.gz has ##reference=file:///mnt/ssd/MegaBOLT_scheduler/reference/hg38.fa
+    // This should be extracted from the header
+    assert!(
+        metadata.reference_genome.build.contains("hg38"),
+        "Should extract reference containing hg38 from header"
+    );
+    assert!(
+        matches!(
+            metadata.reference_genome.source,
+            ReferenceGenomeSource::HeaderLine
+        ),
+        "Source should be HeaderLine since ##reference exists"
+    );
+
+    // Also verify the contigs are GRCh38 (chr1 length = 248,956,422)
+    let chr1_contig = metadata
+        .contigs
+        .iter()
+        .find(|c| c.id == "chr1")
+        .expect("Should have chr1 contig");
+    assert_eq!(chr1_contig.id, "chr1");
+}
+
+#[test]
+fn test_get_reference_genome_string() {
+    let vcf_path = PathBuf::from("sample_data/sample.compressed.vcf.gz");
+
+    if !vcf_path.exists() {
+        eprintln!("Warning: Sample VCF file not found, skipping test");
+        return;
+    }
+
+    let index = load_vcf(&vcf_path, false, false).expect("Failed to load VCF file");
+    let reference_string = index.get_reference_genome();
+
+    // Should include both the build and the source
+    assert!(
+        reference_string.contains("1000GenomesPilot-NCBI36"),
+        "Should contain the genome build"
+    );
+    assert!(
+        reference_string.contains("from header"),
+        "Should indicate source is from header"
     );
 }

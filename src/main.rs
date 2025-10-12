@@ -97,6 +97,7 @@ struct IdQuery {
 #[derive(Debug, serde::Serialize)]
 struct QueryByPositionResponse {
     status: QueryStatus,
+    reference_genome: String,
     query: PositionQuery,
     matched_chromosome: Option<String>,
     available_chromosomes_sample: Option<Vec<String>>,
@@ -107,6 +108,7 @@ struct QueryByPositionResponse {
 #[derive(Debug, serde::Serialize)]
 struct QueryByRegionResponse {
     status: QueryStatus,
+    reference_genome: String,
     query: RegionQuery,
     matched_chromosome: Option<String>,
     available_chromosomes_sample: Option<Vec<String>>,
@@ -117,6 +119,7 @@ struct QueryByRegionResponse {
 #[derive(Debug, serde::Serialize)]
 struct QueryByIdResponse {
     status: QueryStatus,
+    reference_genome: String,
     query: IdQuery,
     result: QueryResult<Variant>,
 }
@@ -140,7 +143,7 @@ impl VcfServer {
         }
     }
 
-    #[tool(description = "Query variants at a specific genomic position")]
+    #[tool(description = "Query variants at a specific genomic position. NOTE: Coordinates are genome build-specific (GRCh37 vs GRCh38). Check the reference_genome field in the response to verify which build is being queried.")]
     async fn query_by_position(
         &self,
         Parameters(QueryByPositionParams {
@@ -163,8 +166,11 @@ impl VcfServer {
             let (status, available_sample, alternate_suggestion) =
                 build_chromosome_response(&index, &requested_chromosome, &matched_chr);
 
+            let reference_genome = index.get_reference_genome();
+
             QueryByPositionResponse {
                 status,
+                reference_genome,
                 query: query_context,
                 matched_chromosome: matched_chr,
                 available_chromosomes_sample: available_sample,
@@ -185,7 +191,7 @@ impl VcfServer {
         Ok(CallToolResult::success(vec![content]))
     }
 
-    #[tool(description = "Query variants in a genomic region")]
+    #[tool(description = "Query variants in a genomic region. NOTE: Coordinates are genome build-specific (GRCh37 vs GRCh38). Check the reference_genome field in the response to verify which build is being queried.")]
     async fn query_by_region(
         &self,
         Parameters(QueryByRegionParams {
@@ -210,8 +216,11 @@ impl VcfServer {
             let (status, available_sample, alternate_suggestion) =
                 build_chromosome_response(&index, &requested_chromosome, &matched_chr);
 
+            let reference_genome = index.get_reference_genome();
+
             QueryByRegionResponse {
                 status,
+                reference_genome,
                 query: query_context,
                 matched_chromosome: matched_chr,
                 available_chromosomes_sample: available_sample,
@@ -232,7 +241,7 @@ impl VcfServer {
         Ok(CallToolResult::success(vec![content]))
     }
 
-    #[tool(description = "Query variants by variant ID (e.g., rsID)")]
+    #[tool(description = "Query variants by variant ID (e.g., rsID). Check the reference_genome field in the response to verify which genome build the coordinates use.")]
     async fn query_by_id(
         &self,
         Parameters(QueryByIdParams { id: requested_id }): Parameters<QueryByIdParams>,
@@ -251,8 +260,11 @@ impl VcfServer {
                 QueryStatus::NotFound
             };
 
+            let reference_genome = index.get_reference_genome();
+
             QueryByIdResponse {
                 status,
+                reference_genome,
                 query: IdQuery {
                     id: requested_id.clone(),
                 },
@@ -314,7 +326,7 @@ impl ServerHandler for VcfServer {
                 .build(),
             server_info: Implementation::from_build_env(),
             instructions: Some(
-                "This server provides VCF variant query tools (query_by_position, query_by_region, query_by_id) and a metadata resource (vcf://metadata)".to_string()
+                "This server provides VCF variant query tools (query_by_position, query_by_region, query_by_id) and a metadata resource (vcf://metadata). IMPORTANT: Genomic coordinates are specific to the reference genome build (GRCh37 vs GRCh38). Always check the reference_genome field in responses.".to_string()
             ),
         }
     }

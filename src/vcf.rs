@@ -26,9 +26,25 @@ pub struct Variant {
 #[derive(Debug, Clone, serde::Serialize)]
 pub struct VcfMetadata {
     pub file_format: String,
-    pub reference: Option<String>,
+    pub reference_genome: ReferenceGenomeInfo,
     pub contigs: Vec<ContigInfo>,
     pub samples: Vec<String>,
+}
+
+// Information about the reference genome build
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct ReferenceGenomeInfo {
+    pub build: String,
+    pub source: ReferenceGenomeSource,
+}
+
+// Source of reference genome information
+#[derive(Debug, Clone, serde::Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ReferenceGenomeSource {
+    HeaderLine,
+    InferredFromContigLengths,
+    Unknown,
 }
 
 #[derive(Debug, Clone, serde::Serialize)]
@@ -162,6 +178,16 @@ impl VcfIndex {
     pub fn get_metadata(&self) -> VcfMetadata {
         extract_metadata(&self.header)
     }
+
+    pub fn get_reference_genome(&self) -> String {
+        let metadata = self.get_metadata();
+        format!("{} ({})", metadata.reference_genome.build,
+                match metadata.reference_genome.source {
+                    ReferenceGenomeSource::HeaderLine => "from header",
+                    ReferenceGenomeSource::InferredFromContigLengths => "inferred from contigs",
+                    ReferenceGenomeSource::Unknown => "unknown source",
+                })
+    }
 }
 
 // Helper function to query indexed VCF by region
@@ -201,15 +227,71 @@ fn query_indexed_region(
 }
 
 
+// Helper function to infer genome build from contig lengths
+// GRCh37/hg19: chr1 = 249,250,621 bp
+// GRCh38/hg38: chr1 = 248,956,422 bp
+fn infer_genome_build_from_contigs(header: &vcf::Header) -> Option<String> {
+    const CHR1_GRCH37_LENGTH: usize = 249_250_621;
+    const CHR1_GRCH38_LENGTH: usize = 248_956_422;
+    const TOLERANCE: usize = 1000; // Allow small differences
+
+    // Try both "chr1" and "1" naming conventions
+    for chr_name in ["chr1", "1"] {
+        if let Some(contig) = header.contigs().get(chr_name) {
+            if let Some(length) = contig.length() {
+                let diff_grch37 = (length as i64 - CHR1_GRCH37_LENGTH as i64).unsigned_abs() as usize;
+                let diff_grch38 = (length as i64 - CHR1_GRCH38_LENGTH as i64).unsigned_abs() as usize;
+
+                if diff_grch37 < TOLERANCE {
+                    return Some("GRCh37".to_string());
+                } else if diff_grch38 < TOLERANCE {
+                    return Some("GRCh38".to_string());
+                }
+            }
+        }
+    }
+
+    None
+}
+
+// Helper function to extract reference genome from VCF header
+fn extract_reference_genome(header: &vcf::Header) -> ReferenceGenomeInfo {
+    use vcf::header::record::value::Collection;
+
+    // Try to get ##reference line from header
+    // Collection can be Unstructured (Vec<String>) or Structured (IndexMap)
+    // ##reference is typically unstructured with a single string value
+    if let Some(Collection::Unstructured(values)) = header.get("reference") {
+        if let Some(reference_value) = values.first() {
+            return ReferenceGenomeInfo {
+                build: reference_value.clone(),
+                source: ReferenceGenomeSource::HeaderLine,
+            };
+        }
+    }
+
+    // Fall back to inferring from contig lengths
+    if let Some(inferred_build) = infer_genome_build_from_contigs(header) {
+        return ReferenceGenomeInfo {
+            build: inferred_build,
+            source: ReferenceGenomeSource::InferredFromContigLengths,
+        };
+    }
+
+    // Unknown
+    ReferenceGenomeInfo {
+        build: "Unknown".to_string(),
+        source: ReferenceGenomeSource::Unknown,
+    }
+}
+
 // Helper function to extract metadata from VCF header
 fn extract_metadata(header: &vcf::Header) -> VcfMetadata {
     // Extract file format version
     let file_format = format!("{:?}", header.file_format());
 
-    // Try to extract reference genome from header
-    // This is stored in the ##reference header line if present
-    // The noodles API makes this complex, so we skip it for now
-    let reference = None;
+    // Extract reference genome information
+    let reference_genome = extract_reference_genome(header);
 
     // Extract contig information
     let contigs: Vec<ContigInfo> = header
@@ -227,7 +309,7 @@ fn extract_metadata(header: &vcf::Header) -> VcfMetadata {
 
     VcfMetadata {
         file_format,
-        reference,
+        reference_genome,
         contigs,
         samples,
     }
