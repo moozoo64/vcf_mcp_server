@@ -38,7 +38,8 @@ fn benchmark_query_by_region(c: &mut Criterion) {
 
     c.bench_function("query_by_region", |b| {
         b.iter(|| {
-            let (results, _) = index.query_by_region(black_box("20"), black_box(14000), black_box(18000));
+            let (results, _) =
+                index.query_by_region(black_box("20"), black_box(14000), black_box(18000));
             black_box(results);
         })
     });
@@ -62,5 +63,10 @@ fn benchmark_query_by_id(c: &mut Criterion) {
     });
 }
 
-criterion_group!(benches, benchmark_query_by_position, benchmark_query_by_region, benchmark_query_by_id);
+criterion_group!(
+    benches,
+    benchmark_query_by_position,
+    benchmark_query_by_region,
+    benchmark_query_by_id
+);
 criterion_main!(benches);

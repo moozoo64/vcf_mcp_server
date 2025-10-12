@@ -181,12 +181,15 @@ impl VcfIndex {
 
     pub fn get_reference_genome(&self) -> String {
         let metadata = self.get_metadata();
-        format!("{} ({})", metadata.reference_genome.build,
-                match metadata.reference_genome.source {
-                    ReferenceGenomeSource::HeaderLine => "from header",
-                    ReferenceGenomeSource::InferredFromContigLengths => "inferred from contigs",
-                    ReferenceGenomeSource::Unknown => "unknown source",
-                })
+        format!(
+            "{} ({})",
+            metadata.reference_genome.build,
+            match metadata.reference_genome.source {
+                ReferenceGenomeSource::HeaderLine => "from header",
+                ReferenceGenomeSource::InferredFromContigLengths => "inferred from contigs",
+                ReferenceGenomeSource::Unknown => "unknown source",
+            }
+        )
     }
 }
 
@@ -226,7 +229,6 @@ fn query_indexed_region(
     results
 }
 
-
 // Helper function to infer genome build from contig lengths
 // GRCh37/hg19: chr1 = 249,250,621 bp
 // GRCh38/hg38: chr1 = 248,956,422 bp
@@ -239,8 +241,10 @@ fn infer_genome_build_from_contigs(header: &vcf::Header) -> Option<String> {
     for chr_name in ["chr1", "1"] {
         if let Some(contig) = header.contigs().get(chr_name) {
             if let Some(length) = contig.length() {
-                let diff_grch37 = (length as i64 - CHR1_GRCH37_LENGTH as i64).unsigned_abs() as usize;
-                let diff_grch38 = (length as i64 - CHR1_GRCH38_LENGTH as i64).unsigned_abs() as usize;
+                let diff_grch37 =
+                    (length as i64 - CHR1_GRCH37_LENGTH as i64).unsigned_abs() as usize;
+                let diff_grch38 =
+                    (length as i64 - CHR1_GRCH38_LENGTH as i64).unsigned_abs() as usize;
 
                 if diff_grch37 < TOLERANCE {
                     return Some("GRCh37".to_string());
@@ -394,10 +398,7 @@ fn convert_info_value(debug_str: &str) -> serde_json::Value {
 }
 
 // Helper function to parse a VCF record into a Variant
-fn parse_variant_record(
-    record: &vcf::Record,
-    header: &vcf::Header,
-) -> std::io::Result<Variant> {
+fn parse_variant_record(record: &vcf::Record, header: &vcf::Header) -> std::io::Result<Variant> {
     Ok(Variant {
         chromosome: record.reference_sequence_name().to_string(),
         position: usize::from(

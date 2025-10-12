@@ -143,7 +143,9 @@ impl VcfServer {
         }
     }
 
-    #[tool(description = "Query variants at a specific genomic position. NOTE: Coordinates are genome build-specific (GRCh37 vs GRCh38). Check the reference_genome field in the response to verify which build is being queried.")]
+    #[tool(
+        description = "Query variants at a specific genomic position. NOTE: Coordinates are genome build-specific (GRCh37 vs GRCh38). Check the reference_genome field in the response to verify which build is being queried."
+    )]
     async fn query_by_position(
         &self,
         Parameters(QueryByPositionParams {
@@ -191,7 +193,9 @@ impl VcfServer {
         Ok(CallToolResult::success(vec![content]))
     }
 
-    #[tool(description = "Query variants in a genomic region. NOTE: Coordinates are genome build-specific (GRCh37 vs GRCh38). Check the reference_genome field in the response to verify which build is being queried.")]
+    #[tool(
+        description = "Query variants in a genomic region. NOTE: Coordinates are genome build-specific (GRCh37 vs GRCh38). Check the reference_genome field in the response to verify which build is being queried."
+    )]
     async fn query_by_region(
         &self,
         Parameters(QueryByRegionParams {
@@ -241,7 +245,9 @@ impl VcfServer {
         Ok(CallToolResult::success(vec![content]))
     }
 
-    #[tool(description = "Query variants by variant ID (e.g., rsID). Check the reference_genome field in the response to verify which genome build the coordinates use.")]
+    #[tool(
+        description = "Query variants by variant ID (e.g., rsID). Check the reference_genome field in the response to verify which genome build the coordinates use."
+    )]
     async fn query_by_id(
         &self,
         Parameters(QueryByIdParams { id: requested_id }): Parameters<QueryByIdParams>,
@@ -542,8 +548,7 @@ mod tests {
         let index = create_test_index();
         let matched_chr = Some("20".to_string());
 
-        let (status, available, alternate) =
-            build_chromosome_response(&index, "20", &matched_chr);
+        let (status, available, alternate) = build_chromosome_response(&index, "20", &matched_chr);
 
         assert!(matches!(status, QueryStatus::Ok));
         assert_eq!(available, None);
@@ -555,8 +560,7 @@ mod tests {
         let index = create_test_index();
         let matched_chr = None;
 
-        let (status, available, alternate) =
-            build_chromosome_response(&index, "99", &matched_chr);
+        let (status, available, alternate) = build_chromosome_response(&index, "99", &matched_chr);
 
         assert!(matches!(status, QueryStatus::ChromosomeNotFound));
         assert!(available.is_some());
@@ -582,8 +586,7 @@ mod tests {
         let index = create_test_index();
         let matched_chr = None;
 
-        let (status, _available, alternate) =
-            build_chromosome_response(&index, "99", &matched_chr);
+        let (status, _available, alternate) = build_chromosome_response(&index, "99", &matched_chr);
 
         assert!(matches!(status, QueryStatus::ChromosomeNotFound));
         assert_eq!(alternate, Some("chr99".to_string()));

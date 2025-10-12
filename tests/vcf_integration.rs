@@ -227,7 +227,10 @@ fn test_chromosome_not_found_returns_none() {
     // Query non-existent chromosome
     let (results, matched_chr) = index.query_by_position("99", 12345);
     assert_eq!(results.len(), 0, "Should find no variants");
-    assert_eq!(matched_chr, None, "Should return None for matched chromosome");
+    assert_eq!(
+        matched_chr, None,
+        "Should return None for matched chromosome"
+    );
 
     // Verify available chromosomes list is not empty
     let available = index.get_available_chromosomes();
@@ -273,8 +276,7 @@ fn test_reference_genome_extraction_from_header() {
 
     // sample.compressed.vcf.gz has ##reference=1000GenomesPilot-NCBI36
     assert_eq!(
-        metadata.reference_genome.build,
-        "1000GenomesPilot-NCBI36",
+        metadata.reference_genome.build, "1000GenomesPilot-NCBI36",
         "Should extract reference from ##reference header line"
     );
     assert!(
