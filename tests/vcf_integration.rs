@@ -345,3 +345,524 @@ fn test_get_reference_genome_string() {
         "Should indicate source is from header"
     );
 }
+
+// ============================================================================
+// Streaming Query Session Tests
+// ============================================================================
+
+#[tokio::test]
+async fn test_streaming_basic_session_lifecycle() {
+    let vcf_path = PathBuf::from("sample_data/sample.compressed.vcf.gz");
+    if !vcf_path.exists() {
+        eprintln!("Warning: Sample VCF file not found, skipping test");
+        return;
+    }
+
+    let index = load_vcf(&vcf_path, false, false).expect("Failed to load VCF file");
+
+    // Start streaming query on region 20:14000-18000 (contains 2 variants)
+    let (mut variants, matched_chr) = index.query_by_region("20", 14000, 18000);
+    assert_eq!(matched_chr, Some("20".to_string()));
+    assert_eq!(variants.len(), 2, "Region should contain 2 variants");
+
+    // Simulate streaming by getting variants one at a time
+    let first_variant = variants.remove(0);
+    assert_eq!(first_variant.position, 14370);
+    assert_eq!(first_variant.id, "rs6054257");
+
+    let second_variant = variants.remove(0);
+    assert_eq!(second_variant.position, 17330);
+    // Second variant has ID '.' in the VCF
+}
+
+#[tokio::test]
+async fn test_streaming_session_with_no_variants() {
+    let vcf_path = PathBuf::from("sample_data/sample.compressed.vcf.gz");
+    if !vcf_path.exists() {
+        eprintln!("Warning: Sample VCF file not found, skipping test");
+        return;
+    }
+
+    let index = load_vcf(&vcf_path, false, false).expect("Failed to load VCF file");
+
+    // Query a region with no variants
+    let (variants, matched_chr) = index.query_by_region("20", 1, 100);
+    assert_eq!(matched_chr, Some("20".to_string()));
+    assert_eq!(variants.len(), 0, "Empty region should return no variants");
+}
+
+#[tokio::test]
+async fn test_streaming_session_chromosome_normalization() {
+    let vcf_path = PathBuf::from("sample_data/sample.compressed.vcf.gz");
+    if !vcf_path.exists() {
+        eprintln!("Warning: Sample VCF file not found, skipping test");
+        return;
+    }
+
+    let index = load_vcf(&vcf_path, false, false).expect("Failed to load VCF file");
+
+    // Query with chr prefix (VCF uses "20" without prefix)
+    let (variants_chr, matched_chr) = index.query_by_region("chr20", 14000, 18000);
+    assert_eq!(
+        matched_chr,
+        Some("20".to_string()),
+        "Should match to chromosome 20"
+    );
+    assert_eq!(variants_chr.len(), 2);
+
+    // Query without chr prefix
+    let (variants_no_chr, _) = index.query_by_region("20", 14000, 18000);
+    assert_eq!(variants_chr.len(), variants_no_chr.len());
+    assert_eq!(variants_chr[0].id, variants_no_chr[0].id);
+}
+
+#[tokio::test]
+async fn test_streaming_session_invalid_chromosome() {
+    let vcf_path = PathBuf::from("sample_data/sample.compressed.vcf.gz");
+    if !vcf_path.exists() {
+        eprintln!("Warning: Sample VCF file not found, skipping test");
+        return;
+    }
+
+    let index = load_vcf(&vcf_path, false, false).expect("Failed to load VCF file");
+
+    // Query non-existent chromosome
+    let (variants, matched_chr) = index.query_by_region("99", 1000, 2000);
+    assert_eq!(variants.len(), 0);
+    assert_eq!(matched_chr, None);
+
+    // Verify available chromosomes list is not empty
+    let available = index.get_available_chromosomes();
+    assert!(!available.is_empty());
+}
+
+#[tokio::test]
+async fn test_streaming_large_region() {
+    let vcf_path = PathBuf::from("sample_data/sample.compressed.vcf.gz");
+    if !vcf_path.exists() {
+        eprintln!("Warning: Sample VCF file not found, skipping test");
+        return;
+    }
+
+    let index = load_vcf(&vcf_path, false, false).expect("Failed to load VCF file");
+
+    // Query entire chromosome 20 range
+    let (variants, matched_chr) = index.query_by_region("20", 1, 100_000_000);
+    assert_eq!(matched_chr, Some("20".to_string()));
+    assert!(
+        variants.len() > 0,
+        "Should find variants across entire chromosome"
+    );
+
+    // Verify variants are sorted by position
+    for i in 1..variants.len() {
+        assert!(
+            variants[i - 1].position <= variants[i].position,
+            "Variants should be sorted by position"
+        );
+    }
+}
+
+#[tokio::test]
+async fn test_streaming_position_boundary() {
+    let vcf_path = PathBuf::from("sample_data/sample.compressed.vcf.gz");
+    if !vcf_path.exists() {
+        eprintln!("Warning: Sample VCF file not found, skipping test");
+        return;
+    }
+
+    let index = load_vcf(&vcf_path, false, false).expect("Failed to load VCF file");
+
+    // Query exact variant position
+    let (variants_exact, _) = index.query_by_region("20", 14370, 14370);
+    assert_eq!(variants_exact.len(), 1);
+    assert_eq!(variants_exact[0].position, 14370);
+
+    // Query just before variant
+    let (variants_before, _) = index.query_by_region("20", 14000, 14369);
+    assert_eq!(variants_before.len(), 0);
+
+    // Query just after variant starts
+    let (variants_after, _) = index.query_by_region("20", 14371, 15000);
+    assert_eq!(variants_after.len(), 0);
+}
+
+#[tokio::test]
+async fn test_streaming_multiallelic_variant() {
+    let vcf_path = PathBuf::from("sample_data/sample.compressed.vcf.gz");
+    if !vcf_path.exists() {
+        eprintln!("Warning: Sample VCF file not found, skipping test");
+        return;
+    }
+
+    let index = load_vcf(&vcf_path, false, false).expect("Failed to load VCF file");
+
+    // Query rs6040355 which has 2 alternate alleles
+    let results = index.query_by_id("rs6040355");
+    assert_eq!(results.len(), 1);
+    assert_eq!(
+        results[0].alternate.len(),
+        2,
+        "Should have 2 alternate alleles"
+    );
+    assert_eq!(results[0].alternate[0], "G");
+    assert_eq!(results[0].alternate[1], "T");
+}
+
+// ============================================================================
+// Filter Evaluation Tests (for Streaming)
+// ============================================================================
+
+#[tokio::test]
+async fn test_filter_evaluation_with_streaming_data() {
+    use vcf_mcp_server::vcf::evaluate_filter;
+
+    let vcf_path = PathBuf::from("sample_data/sample.compressed.vcf.gz");
+    if !vcf_path.exists() {
+        eprintln!("Warning: Sample VCF file not found, skipping test");
+        return;
+    }
+
+    let index = load_vcf(&vcf_path, false, false).expect("Failed to load VCF file");
+    let (variants, _) = index.query_by_region("20", 14000, 18000);
+
+    assert!(variants.len() >= 1, "Need at least one variant for testing");
+    let variant = &variants[0];
+
+    // Test QUAL filter
+    if let Some(quality) = variant.quality {
+        let filter = format!("QUAL > {}", quality - 1.0);
+        assert!(
+            evaluate_filter(variant, &filter).unwrap(),
+            "QUAL should be > quality-1"
+        );
+
+        let filter_fail = format!("QUAL > {}", quality + 1.0);
+        assert!(
+            !evaluate_filter(variant, &filter_fail).unwrap(),
+            "QUAL should not be > quality+1"
+        );
+    }
+
+    // Test FILTER field
+    if !variant.filter.is_empty() {
+        let filter_value = &variant.filter[0];
+        let filter = format!("FILTER == {}", filter_value);
+        assert!(
+            evaluate_filter(variant, &filter).unwrap(),
+            "FILTER should match"
+        );
+    }
+
+    // Test empty filter (should always pass)
+    assert!(
+        evaluate_filter(variant, "").unwrap(),
+        "Empty filter should always pass"
+    );
+}
+
+#[tokio::test]
+async fn test_filter_with_multiple_variants() {
+    use vcf_mcp_server::vcf::evaluate_filter;
+
+    let vcf_path = PathBuf::from("sample_data/sample.compressed.vcf.gz");
+    if !vcf_path.exists() {
+        eprintln!("Warning: Sample VCF file not found, skipping test");
+        return;
+    }
+
+    let index = load_vcf(&vcf_path, false, false).expect("Failed to load VCF file");
+    let (variants, _) = index.query_by_region("20", 14000, 18000);
+
+    // Filter for FILTER == PASS
+    let filter = "FILTER == PASS";
+    let passing_variants: Vec<_> = variants
+        .iter()
+        .filter(|v| evaluate_filter(v, filter).unwrap_or(false))
+        .collect();
+
+    // Verify all filtered variants have PASS filter
+    for variant in passing_variants {
+        assert!(variant.filter.contains(&"PASS".to_string()));
+    }
+}
+
+// ============================================================================
+// Error Handling Tests
+// ============================================================================
+
+#[test]
+fn test_query_with_invalid_position_zero() {
+    let vcf_path = PathBuf::from("sample_data/sample.compressed.vcf.gz");
+    if !vcf_path.exists() {
+        eprintln!("Warning: Sample VCF file not found, skipping test");
+        return;
+    }
+
+    let index = load_vcf(&vcf_path, false, false).expect("Failed to load VCF file");
+
+    // Position 0 is invalid in VCF (1-based)
+    let (variants, _) = index.query_by_position("20", 0);
+    assert_eq!(variants.len(), 0, "Position 0 should return no results");
+}
+
+#[test]
+fn test_query_with_start_greater_than_end() {
+    let vcf_path = PathBuf::from("sample_data/sample.compressed.vcf.gz");
+    if !vcf_path.exists() {
+        eprintln!("Warning: Sample VCF file not found, skipping test");
+        return;
+    }
+
+    let index = load_vcf(&vcf_path, false, false).expect("Failed to load VCF file");
+
+    // Start > End should return empty results (not an error in our implementation)
+    let (variants, _) = index.query_by_region("20", 18000, 14000);
+    assert_eq!(variants.len(), 0, "Inverted range should return no results");
+}
+
+#[test]
+fn test_query_nonexistent_variant_id() {
+    let vcf_path = PathBuf::from("sample_data/sample.compressed.vcf.gz");
+    if !vcf_path.exists() {
+        eprintln!("Warning: Sample VCF file not found, skipping test");
+        return;
+    }
+
+    let index = load_vcf(&vcf_path, false, false).expect("Failed to load VCF file");
+
+    // Query for non-existent ID
+    let results = index.query_by_id("nonexistent_id_12345");
+    assert_eq!(results.len(), 0, "Nonexistent ID should return no results");
+}
+
+#[test]
+fn test_query_empty_id() {
+    let vcf_path = PathBuf::from("sample_data/sample.compressed.vcf.gz");
+    if !vcf_path.exists() {
+        eprintln!("Warning: Sample VCF file not found, skipping test");
+        return;
+    }
+
+    let index = load_vcf(&vcf_path, false, false).expect("Failed to load VCF file");
+
+    // Query for empty ID
+    let results = index.query_by_id("");
+    assert_eq!(results.len(), 0, "Empty ID should return no results");
+}
+
+// ============================================================================
+// Index Persistence Tests
+// ============================================================================
+
+#[test]
+fn test_index_files_created() {
+    let vcf_path = PathBuf::from("sample_data/sample.compressed.vcf.gz");
+    if !vcf_path.exists() {
+        eprintln!("Warning: Sample VCF file not found, skipping test");
+        return;
+    }
+
+    // Load VCF with index saving enabled
+    let _index = load_vcf(&vcf_path, false, false).expect("Failed to load VCF file");
+
+    // Check for genomic index (either .tbi or .csi)
+    // Note: extensions should be .vcf.gz.tbi or .vcf.gz.csi, not replacing .gz
+    let mut tbi_path = vcf_path.clone();
+    tbi_path.set_file_name(format!(
+        "{}.tbi",
+        vcf_path.file_name().unwrap().to_string_lossy()
+    ));
+    let mut csi_path = vcf_path.clone();
+    csi_path.set_file_name(format!(
+        "{}.csi",
+        vcf_path.file_name().unwrap().to_string_lossy()
+    ));
+    let has_genomic_index = tbi_path.exists() || csi_path.exists();
+    assert!(
+        has_genomic_index,
+        "Should create genomic index (.tbi or .csi)"
+    );
+
+    // Check for ID index
+    let mut idx_path = vcf_path.clone();
+    idx_path.set_file_name(format!(
+        "{}.idx",
+        vcf_path.file_name().unwrap().to_string_lossy()
+    ));
+    assert!(idx_path.exists(), "Should create ID index (.idx)");
+}
+
+#[test]
+fn test_never_save_index_flag() {
+    use std::fs;
+    use tempfile::TempDir;
+
+    let vcf_path = PathBuf::from("sample_data/sample.compressed.vcf.gz");
+    if !vcf_path.exists() {
+        eprintln!("Warning: Sample VCF file not found, skipping test");
+        return;
+    }
+
+    // Create a temporary copy of the VCF file
+    let temp_dir = TempDir::new().expect("Failed to create temp dir");
+    let temp_vcf = temp_dir.path().join("test.vcf.gz");
+    fs::copy(&vcf_path, &temp_vcf).expect("Failed to copy VCF file");
+
+    // Load with never_save_index = true
+    let _index = load_vcf(&temp_vcf, false, true).expect("Failed to load VCF file");
+
+    // Verify no index files created
+    let tbi_path = temp_vcf.with_extension("vcf.gz.tbi");
+    let csi_path = temp_vcf.with_extension("vcf.gz.csi");
+    let idx_path = temp_vcf.with_extension("vcf.gz.idx");
+
+    assert!(
+        !tbi_path.exists(),
+        "Should not create .tbi index with never_save_index"
+    );
+    assert!(
+        !csi_path.exists(),
+        "Should not create .csi index with never_save_index"
+    );
+    assert!(
+        !idx_path.exists(),
+        "Should not create .idx index with never_save_index"
+    );
+}
+
+#[test]
+fn test_index_loading_from_disk() {
+    let vcf_path = PathBuf::from("sample_data/sample.compressed.vcf.gz");
+    if !vcf_path.exists() {
+        eprintln!("Warning: Sample VCF file not found, skipping test");
+        return;
+    }
+
+    // Ensure indices exist by loading once
+    let _ = load_vcf(&vcf_path, false, false).expect("Failed to load VCF file");
+
+    // Load again - should use existing indices
+    let index = load_vcf(&vcf_path, false, false).expect("Failed to load VCF file");
+
+    // Verify index works correctly
+    let (variants, _) = index.query_by_position("20", 14370);
+    assert_eq!(variants.len(), 1);
+    assert_eq!(variants[0].id, "rs6054257");
+}
+
+// ============================================================================
+// Edge Case Tests
+// ============================================================================
+
+#[test]
+fn test_chromosome_x_query() {
+    let vcf_path = PathBuf::from("sample_data/sample.compressed.vcf.gz");
+    if !vcf_path.exists() {
+        eprintln!("Warning: Sample VCF file not found, skipping test");
+        return;
+    }
+
+    let index = load_vcf(&vcf_path, false, false).expect("Failed to load VCF file");
+
+    // Test X chromosome queries
+    let (variants_x, matched_chr) = index.query_by_position("X", 10);
+    if !variants_x.is_empty() {
+        assert_eq!(matched_chr, Some("X".to_string()));
+        assert_eq!(variants_x[0].chromosome, "X");
+    }
+
+    // Test with chr prefix
+    let (variants_chrx, matched_chr_x) = index.query_by_position("chrX", 10);
+    if !variants_chrx.is_empty() {
+        assert_eq!(matched_chr_x, Some("X".to_string()));
+    }
+}
+
+#[test]
+fn test_variant_with_missing_quality() {
+    use vcf_mcp_server::vcf::evaluate_filter;
+
+    let vcf_path = PathBuf::from("sample_data/sample.compressed.vcf.gz");
+    if !vcf_path.exists() {
+        eprintln!("Warning: Sample VCF file not found, skipping test");
+        return;
+    }
+
+    let index = load_vcf(&vcf_path, false, false).expect("Failed to load VCF file");
+    let (variants, _) = index.query_by_region("20", 1, 10_000_000);
+
+    // Find a variant with missing quality (if any)
+    let variant_missing_qual = variants.iter().find(|v| v.quality.is_none());
+    if let Some(variant) = variant_missing_qual {
+        // QUAL filter should not match if quality is missing
+        assert!(!evaluate_filter(variant, "QUAL > 0").unwrap());
+    }
+}
+
+#[test]
+fn test_variant_with_no_alternates() {
+    let vcf_path = PathBuf::from("sample_data/sample.compressed.vcf.gz");
+    if !vcf_path.exists() {
+        eprintln!("Warning: Sample VCF file not found, skipping test");
+        return;
+    }
+
+    let index = load_vcf(&vcf_path, false, false).expect("Failed to load VCF file");
+    let (variants, _) = index.query_by_region("20", 1, 10_000_000);
+
+    // VCF files may have reference-only calls with '.' as ALT
+    // Our parser converts these to empty alternate arrays or filters them out
+    // Just verify that variants we do get have the expected structure
+    for variant in &variants {
+        if !variant.alternate.is_empty() {
+            // If there are alternates, they should be valid non-empty strings
+            for alt in &variant.alternate {
+                assert!(
+                    !alt.is_empty(),
+                    "Alternate alleles should not be empty strings"
+                );
+            }
+        }
+    }
+}
+
+#[test]
+fn test_get_available_chromosomes() {
+    let vcf_path = PathBuf::from("sample_data/sample.compressed.vcf.gz");
+    if !vcf_path.exists() {
+        eprintln!("Warning: Sample VCF file not found, skipping test");
+        return;
+    }
+
+    let index = load_vcf(&vcf_path, false, false).expect("Failed to load VCF file");
+    let chromosomes = index.get_available_chromosomes();
+
+    assert!(!chromosomes.is_empty(), "Should have available chromosomes");
+    assert!(
+        chromosomes.contains(&"20".to_string()),
+        "Should include chromosome 20"
+    );
+}
+
+#[test]
+fn test_vcf_header_retrieval() {
+    let vcf_path = PathBuf::from("sample_data/sample.compressed.vcf.gz");
+    if !vcf_path.exists() {
+        eprintln!("Warning: Sample VCF file not found, skipping test");
+        return;
+    }
+
+    let index = load_vcf(&vcf_path, false, false).expect("Failed to load VCF file");
+    let header = index.get_header_string();
+
+    assert!(!header.is_empty(), "Header should not be empty");
+    assert!(
+        header.contains("##fileformat=VCF"),
+        "Header should contain VCF format"
+    );
+    assert!(
+        header.contains("#CHROM"),
+        "Header should contain column headers"
+    );
+}

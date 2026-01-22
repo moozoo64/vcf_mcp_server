@@ -29,7 +29,7 @@ The binary will be at `./target/release/vcf_mcp_server`
 
 - `--sse <ADDR:PORT>` - Run HTTP server on specified address (e.g., 127.0.0.1:8090)
 - `--debug` - Enable debug logging
-- `--never-save-index` - Never save the built tabix index to disk (for read-only/ephemeral environments)
+- `--never-save-index` - Never save the built index to disk (for read-only/ephemeral environments)
 
 ## Available MCP Tools
 
@@ -87,11 +87,42 @@ Query variants by variant ID (e.g., rsID).
 }
 ```
 
+### 4. `start_region_query` (Streaming)
+Start a streaming query session for a genomic region. Returns one variant at a time.
+
+**Parameters:**
+- `chromosome` (string): Chromosome name (e.g., '1', '2', 'X', 'chr1')
+- `start` (integer): Start position (1-based, inclusive)
+- `end` (integer): End position (1-based, inclusive)
+
+**Returns:** First variant + session_id for subsequent calls
+
+### 5. `get_next_variant` (Streaming)
+Get the next variant from an active streaming session.
+
+**Parameters:**
+- `session_id` (string): Session ID from start_region_query
+
+**Returns:** Next variant (or null if exhausted)
+
+### 6. `close_query_session` (Streaming)
+Close an active streaming session and free resources.
+
+**Parameters:**
+- `session_id` (string): Session ID to close
+
+**See [STREAMING.md](STREAMING.md) for detailed streaming API documentation.**
+
 ## VCF File Requirements
 
 ### Compressed VCF Files (Recommended)
 
-For efficient querying by position/region, use bgzip-compressed VCF files with tabix indexes.
+For efficient querying by position/region, use bgzip-compressed VCF files with genomic indices.
+The server supports both **tabix (.tbi)** and **CSI (.csi)** indices:
+
+- **CSI indices** are checked first (better support for very large chromosomes > 512 Mbp)
+- **Tabix indices** are used as fallback (more widely compatible)
+
 You probably already have these files if you're using a genome browser or other tools.
 If not, you can create them using the following commands:
 
@@ -101,13 +132,21 @@ If not, you can create them using the following commands:
    # Creates myfile.vcf.gz
    ```
 
-2. **Create tabix index:**
+2. **Create index (choose one):**
+   
+   **Tabix index (default, widely compatible):**
    ```bash
    tabix -p vcf myfile.vcf.gz
    # Creates myfile.vcf.gz.tbi
    ```
+   
+   **CSI index (for very large chromosomes):**
+   ```bash
+   bcftools index -c myfile.vcf.gz
+   # Creates myfile.vcf.gz.csi
+   ```
 
-The server will automatically use the `.tbi` index file if present, or build an in-memory index. The tabix file will be saved it alongside your VCF file if it doesn't already exist and `--never-save-index` was not used.
+The server will automatically detect and use `.csi` or `.tbi` index files if present, or build an in-memory tabix index. The index will be saved alongside your VCF file if it doesn't already exist and `--never-save-index` was not used.
 
 ### Uncompressed VCF Files
 

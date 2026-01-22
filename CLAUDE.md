@@ -16,51 +16,61 @@ VCF MCP Server is a Rust-based Model Context Protocol (MCP) server that exposes 
 ## Commands
 
 ### Build
+
 ```bash
 cargo build
 ```
 
 ### Run
+
 ```bash
 cargo run
 ```
 
 ### Build for release
+
 ```bash
 cargo build --release
 ```
 
 ### Run tests
+
 ```bash
 cargo test
 ```
 
 ### Run a single test
+
 ```bash
 cargo test <test_name>
 ```
 
 ### Check code without building
+
 ```bash
 cargo check
 ```
 
 ### Format code
+
 ```bash
 cargo fmt
 ```
 
 ### Lint
+
 ```bash
 cargo clippy
 ```
 
 ### Run benchmarks
+
 ```bash
 cargo bench
 ```
 
 Benchmarks use the Criterion framework to measure performance of VCF query operations. This helps detect performance regressions in:
+
 - `query_by_position`: Lookup variants at specific genomic positions
 - `query_by_region`: Lookup variants in genomic regions
 - `query_by_id`: Lookup variants by their ID (e.g., rsID)
@@ -77,6 +87,7 @@ This is an MCP server that bridges VCF genomic data files with LLMs. The server 
 - **rmcp**: Provides the MCP server infrastructure to expose VCF data operations as tools/resources that LLMs can invoke
 
 The MCP protocol allows LLMs to query genomic variants by:
+
 - Chromosome location
 - Genomic position
 - Variant ID
@@ -84,5 +95,6 @@ The MCP protocol allows LLMs to query genomic variants by:
 This enables LLMs to perform analysis on genomic variation data without needing to understand the VCF file format directly.
 
 ## Constraints
-* Filenames starting with NG1Q can be used in ad-hoc tests. Any unit/integration tests or benchmarks must use data from the `sample_data` directory.
-* Always use stderr when logging or printing debug information.
+
+- Filenames starting with NG1Q can be used in ad-hoc tests. Any unit/integration tests or benchmarks must use data from the `sample_data` directory.
+- Always use stderr when logging or printing debug information.

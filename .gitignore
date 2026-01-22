@@ -7,3 +7,5 @@
 # VCF index files
 *.tbi
 *.idx
+
+/.vscode

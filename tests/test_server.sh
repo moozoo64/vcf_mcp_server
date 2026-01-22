@@ -104,12 +104,12 @@ response=$(send_mcp_request \
     "List available tools")
 check_no_error "$response"
 
-# Check that we have 3 tools
+# Check that we have 8 tools
 tool_count=$(echo "$response" | jq '.result.tools | length')
-if [ "$tool_count" == "3" ]; then
-    echo -e "${GREEN}✓ Found 3 tools${NC}"
+if [ "$tool_count" == "8" ]; then
+    echo -e "${GREEN}✓ Found 8 tools${NC}"
 else
-    echo -e "${RED}✗ Expected 3 tools, found $tool_count${NC}"
+    echo -e "${RED}✗ Expected 8 tools, found $tool_count${NC}"
 fi
 
 # Display tool names
@@ -153,6 +153,124 @@ if echo "$response" | jq -e '.result.content[0].text' | grep -q "No variants fou
     echo -e "${GREEN}✓ Correctly reports no variants found${NC}"
 else
     echo -e "${RED}✗ Expected 'No variants found' message${NC}"
+fi
+
+# Test 7: Call tool - get_vcf_header
+response=$(send_mcp_request \
+    '{"jsonrpc":"2.0","id":7,"method":"tools/call","params":{"name":"get_vcf_header","arguments":{}}}' \
+    "Get VCF header")
+check_no_error "$response"
+
+if echo "$response" | jq -e '.result.content[0].text' | grep -q "##fileformat=VCF"; then
+    echo -e "${GREEN}✓ Header contains VCF format line${NC}"
+else
+    echo -e "${RED}✗ Expected VCF format header${NC}"
+fi
+
+# Test 8: Call tool - start_region_query (streaming)
+response=$(send_mcp_request \
+    '{"jsonrpc":"2.0","id":8,"method":"tools/call","params":{"name":"start_region_query","arguments":{"chromosome":"20","start":14000,"end":18000,"filter":""}}}' \
+    "Start region query (streaming)")
+check_no_error "$response"
+
+# Extract session ID for next test
+session_id=$(echo "$response" | jq -r '.result.content[0].text' | jq -r '.session_id')
+if [ ! -z "$session_id" ] && [ "$session_id" != "null" ]; then
+    echo -e "${GREEN}✓ Session created with ID: ${session_id:0:8}...${NC}"
+else
+    echo -e "${RED}✗ Failed to create session${NC}"
+fi
+
+# Test 9: Call tool - get_next_variant
+if [ ! -z "$session_id" ] && [ "$session_id" != "null" ]; then
+    response=$(send_mcp_request \
+        "{\"jsonrpc\":\"2.0\",\"id\":9,\"method\":\"tools/call\",\"params\":{\"name\":\"get_next_variant\",\"arguments\":{\"session_id\":\"$session_id\"}}}" \
+        "Get next variant from session")
+    check_no_error "$response"
+    
+    if echo "$response" | jq -e '.result.content[0].text' | jq -e '.variant' >/dev/null; then
+        echo -e "${GREEN}✓ Retrieved next variant${NC}"
+    else
+        echo -e "${RED}✗ Failed to get next variant${NC}"
+    fi
+    
+    # Test 10: Call tool - close_query_session
+    response=$(send_mcp_request \
+        "{\"jsonrpc\":\"2.0\",\"id\":10,\"method\":\"tools/call\",\"params\":{\"name\":\"close_query_session\",\"arguments\":{\"session_id\":\"$session_id\"}}}" \
+        "Close query session")
+    check_no_error "$response"
+    
+    if echo "$response" | jq -e '.result.content[0].text' | jq -e '.closed == true' >/dev/null; then
+        echo -e "${GREEN}✓ Session closed successfully${NC}"
+    else
+        echo -e "${RED}✗ Failed to close session${NC}"
+    fi
+fi
+
+# Test 11: Call tool - get_documentation (readme)
+response=$(send_mcp_request \
+    '{"jsonrpc":"2.0","id":11,"method":"tools/call","params":{"name":"get_documentation","arguments":{"doc_type":"readme"}}}' \
+    "Get documentation (readme)")
+check_no_error "$response"
+
+if echo "$response" | jq -e '.result.content[0].text' | grep -q "VCF MCP Server"; then
+    echo -e "${GREEN}✓ Readme documentation retrieved${NC}"
+else
+    echo -e "${RED}✗ Failed to get readme documentation${NC}"
+fi
+
+# Test 12: Call tool - get_documentation (streaming)
+response=$(send_mcp_request \
+    '{"jsonrpc":"2.0","id":12,"method":"tools/call","params":{"name":"get_documentation","arguments":{"doc_type":"streaming"}}}' \
+    "Get documentation (streaming)")
+check_no_error "$response"
+
+if echo "$response" | jq -e '.result.content[0].text' | grep -q "Streaming Query"; then
+    echo -e "${GREEN}✓ Streaming documentation retrieved${NC}"
+else
+    echo -e "${RED}✗ Failed to get streaming documentation${NC}"
+fi
+
+# Test 13: Call tool - get_documentation (filters)
+response=$(send_mcp_request \
+    '{"jsonrpc":"2.0","id":13,"method":"tools/call","params":{"name":"get_documentation","arguments":{"doc_type":"filters"}}}' \
+    "Get documentation (filters)")
+check_no_error "$response"
+
+if echo "$response" | jq -e '.result.content[0].text' | grep -q "Filter"; then
+    echo -e "${GREEN}✓ Filters documentation retrieved${NC}"
+else
+    echo -e "${RED}✗ Failed to get filters documentation${NC}"
+fi
+
+# Test 14: List resources
+response=$(send_mcp_request \
+    '{"jsonrpc":"2.0","id":14,"method":"resources/list","params":{}}' \
+    "List available resources")
+check_no_error "$response"
+
+# Check that we have the vcf://header resource
+resource_count=$(echo "$response" | jq '.result.resources | length')
+if [ "$resource_count" -ge "1" ]; then
+    echo -e "${GREEN}✓ Found ${resource_count} resource(s)${NC}"
+    echo "Available resources:"
+    echo "$response" | jq -r '.result.resources[].uri' | while read -r uri; do
+        echo "  - $uri"
+    done
+else
+    echo -e "${RED}✗ Expected at least 1 resource, found $resource_count${NC}"
+fi
+
+# Test 15: Read resource - vcf://header
+response=$(send_mcp_request \
+    '{"jsonrpc":"2.0","id":15,"method":"resources/read","params":{"uri":"vcf://header"}}' \
+    "Read vcf://header resource")
+check_no_error "$response"
+
+if echo "$response" | jq -e '.result.contents[0].text' | grep -q "##fileformat=VCF"; then
+    echo -e "${GREEN}✓ Resource contains VCF header${NC}"
+else
+    echo -e "${RED}✗ Expected VCF header in resource${NC}"
 fi
 
 echo -e "\n${BLUE}======================================${NC}"
