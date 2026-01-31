@@ -10,8 +10,8 @@ VCF MCP Server is a Rust-based Model Context Protocol (MCP) server that exposes 
 
 - **Language**: Rust (2021 edition)
 - **Key Dependencies**:
-  - `noodles` (v0.101.0): VCF parsing and tabix indexing support
-  - `rmcp` (v0.8): MCP server implementation
+  - `noodles` (v0.104.0): VCF parsing and tabix indexing support
+  - `rmcp` (v0.13.0): MCP server implementation
 
 ## Commands
 

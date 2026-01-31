@@ -19,9 +19,17 @@ This is a **Model Context Protocol (MCP) server** that exposes VCF (Variant Call
 
 2. **MCP Server Layer** ([src/main.rs](src/main.rs))
    - `VcfServer`: Implements MCP protocol using `rmcp` crate
-   - Exposes 4 tools: `query_by_position`, `query_by_region`, `query_by_id`, `get_vcf_header`
+   - Exposes 9 tools:
+     - `query_by_position`, `query_by_region`, `query_by_id`: Direct queries
+     - `start_region_query`, `get_next_variant`, `close_query_session`: Streaming API
+     - `get_vcf_header`: Raw VCF header retrieval
+     - `get_statistics`: Comprehensive VCF statistics
+     - `get_documentation`: Embedded documentation
+   - Supports variant filtering via `vcf-filter` library on `query_by_region` and `start_region_query`
+   - **10kb region size limit** on `query_by_region` for performance; use streaming for larger regions
    - Uses `#[tool_router]` macro from rmcp to auto-generate tool schema
    - Wraps `VcfIndex` in `Arc<Mutex<>>` for async access
+   - Stateful streaming sessions with 5-minute timeout and UUID-based session IDs
 
 3. **Transport Layer** ([src/main.rs](src/main.rs))
    - stdio transport (default): JSON-RPC over stdin/stdout

@@ -1,5 +1,10 @@
 # Streaming Query Examples
 
+> **Related Documentation:**
+> - [Streaming API Guide](STREAMING.md) - Complete streaming API documentation
+> - [Streaming with Filters](STREAMING_FILTER_EXAMPLES.md) - Filter examples for streaming queries
+> - [Filter Syntax Reference](FILTER_EXAMPLES.md) - Complete filter syntax documentation
+
 ## Example 1: Find First 5 Variants in a Region
 
 ```javascript

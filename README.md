@@ -1,6 +1,8 @@
 # VCF MCP Server: Exposing Variant Calling Format files to LLMs for Analysis
 _No warranty express or implied. This was totally vibe-coded while chronicly sleep-deprived and watching Bluey and Tremors 5._ Use at your own risk. AFAICT it works and outputs line up with what I get through traditional tools.
 
+**Current Version**: 0.2.0 | [Changelog](CHANGELOG.md)
+
 ## Overview
 
 This is an MCP server that exposes a VCF (Variant Calling Format) file to LLMs for genomic variant analysis. The server provides tools to query variants by genomic position, region, or variant ID.
@@ -52,12 +54,13 @@ Query variants at a specific genomic position.
 ```
 
 ### 2. `query_by_region`
-Query variants in a genomic region.
+Query variants in a genomic region. **Note: Region size is limited to 10,000 base pairs (10kb) for performance reasons.** For larger regions, use the streaming API (`start_region_query`).
 
 **Parameters:**
 - `chromosome` (string): Chromosome name (e.g., '1', '2', 'X', 'chr1')
 - `start` (integer): Start position (1-based, inclusive)
 - `end` (integer): End position (1-based, inclusive)
+- `filter` (string, optional): Filter expression to select variants (see [FILTER_EXAMPLES.md](FILTER_EXAMPLES.md))
 
 **Example:**
 ```json
@@ -66,7 +69,8 @@ Query variants in a genomic region.
   "arguments": {
     "chromosome": "20",
     "start": 14000,
-    "end": 18000
+    "end": 18000,
+    "filter": "QUAL > 30 && FILTER == \"PASS\""
   }
 }
 ```
@@ -94,6 +98,7 @@ Start a streaming query session for a genomic region. Returns one variant at a t
 - `chromosome` (string): Chromosome name (e.g., '1', '2', 'X', 'chr1')
 - `start` (integer): Start position (1-based, inclusive)
 - `end` (integer): End position (1-based, inclusive)
+- `filter` (string, optional): Filter expression to select variants (see [FILTER_EXAMPLES.md](FILTER_EXAMPLES.md))
 
 **Returns:** First variant + session_id for subsequent calls
 
@@ -112,6 +117,81 @@ Close an active streaming session and free resources.
 - `session_id` (string): Session ID to close
 
 **See [STREAMING.md](STREAMING.md) for detailed streaming API documentation.**
+
+### 7. `get_vcf_header`
+Get the raw VCF file header text.
+
+**Returns:** Header text with line count and reference genome information
+
+**Example:**
+```json
+{
+  "name": "get_vcf_header",
+  "arguments": {}
+}
+```
+
+### 8. `get_statistics`
+Get comprehensive statistics about the VCF file including variant counts, quality metrics, and variant type distributions.
+
+**Returns:** 
+- Total variant count
+- SNP/insertion/deletion/MNP/complex variant counts
+- Quality score statistics (min, max, mean)
+- Depth statistics
+- Filter status distribution
+- Chromosome-specific variant counts
+
+**Example:**
+```json
+{
+  "name": "get_statistics",
+  "arguments": {}
+}
+```
+
+### 9. `get_documentation`
+Get embedded documentation for this MCP server.
+
+**Parameters:**
+- `doc_type` (string): Type of documentation - "readme", "streaming", "filters", "streaming-filters", or "all"
+
+**Example:**
+```json
+{
+  "name": "get_documentation",
+  "arguments": {
+    "doc_type": "filters"
+  }
+}
+```
+
+## Filter Support
+
+The server supports advanced variant filtering using the [vcf-filter](https://github.com/moozoo64/vcf-filter) library. Filters can be applied to `query_by_region` and `start_region_query` tools.
+
+**Example filters:**
+- `QUAL > 30` - Quality score greater than 30
+- `FILTER == "PASS"` - Only variants that passed all filters
+- `DP >= 10` - Read depth of at least 10
+- `QUAL > 30 && FILTER == "PASS"` - Combined conditions
+
+**See [FILTER_EXAMPLES.md](FILTER_EXAMPLES.md) for comprehensive filter syntax documentation and examples.**
+
+## MCP Resources
+
+The server exposes an MCP resource for accessing VCF metadata:
+
+### `vcf://metadata`
+Provides structured metadata from the VCF file header including:
+- File format version
+- Reference genome information
+- Contig definitions (chromosome names and lengths)
+- Sample IDs
+- Filter definitions
+- INFO and FORMAT field definitions
+
+This resource can be accessed by MCP clients to understand the structure of the VCF file without querying variants.
 
 ## VCF File Requirements
 

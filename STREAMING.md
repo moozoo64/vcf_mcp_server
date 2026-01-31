@@ -1,5 +1,10 @@
 # Streaming Query API
 
+> **Related Documentation:**
+> - [Streaming Examples](STREAMING_EXAMPLES.md) - Practical usage examples
+> - [Streaming with Filters](STREAMING_FILTER_EXAMPLES.md) - Filter examples for streaming queries
+> - [Filter Syntax Reference](FILTER_EXAMPLES.md) - Complete filter syntax documentation
+
 The VCF MCP Server now supports **stateful streaming queries** that return variants one at a time, ideal for large genomic regions or memory-constrained environments.
 
 ## Why Streaming?

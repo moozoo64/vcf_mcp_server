@@ -1,12 +1,17 @@
 # Streaming Variant Filter Examples
 
+> **Related Documentation:**
+> - [Streaming API Guide](STREAMING.md) - Complete streaming API documentation
+> - [Streaming Examples](STREAMING_EXAMPLES.md) - Basic streaming usage examples
+> - [Filter Syntax Reference](FILTER_EXAMPLES.md) - Complete filter syntax documentation
+
 **⚠️ Breaking Change in v0.2.0**: The filter system has been upgraded to use the [vcf-filter](https://github.com/moozoo64/vcf-filter) library. See [FILTER_EXAMPLES.md](FILTER_EXAMPLES.md) for syntax reference.
 
-This document demonstrates using filters with the streaming variant query tools (`stream_region_query` and `get_next_variant`).
+This document demonstrates using filters with the streaming variant query tools (`start_region_query` and `get_next_variant`).
 
 ## Streaming Query Workflow
 
-1. **Initialize stream** with `stream_region_query`:
+1. **Initialize stream** with `start_region_query`:
    - Specify region (chromosome + range)
    - Optional filter expression
    - Returns `session_id` for subsequent queries
@@ -231,7 +236,7 @@ Returns up to 10 variants at once.
 ### Initialize Stream
 
 ```json
-// Tool: stream_region_query
+// Tool: start_region_query
 {
   "chromosome": "20",
   "start": 1000000,

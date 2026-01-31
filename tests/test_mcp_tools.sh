@@ -60,13 +60,13 @@ tools_response=$(echo "$json_lines" | grep '"id":2' || true)
 if [ ! -z "$tools_response" ]; then
     tool_count=$(echo "$tools_response" | jq -r '.result.tools | length' 2>/dev/null || echo "0")
     echo -e "\n${BLUE}Test: Tool Count${NC}"
-    if [ "$tool_count" -eq "8" ]; then
-        echo -e "${GREEN}✓ Found 8 tools${NC}"
+    if [ "$tool_count" -eq "9" ]; then
+        echo -e "${GREEN}✓ Found 9 tools${NC}"
         echo "$tools_response" | jq -r '.result.tools[].name' | while read -r tool; do
             echo "  - $tool"
         done
     else
-        echo -e "${RED}✗ Expected 7 tools, found $tool_count${NC}"
+        echo -e "${RED}✗ Expected 9 tools, found $tool_count${NC}"
     fi
 fi
 
