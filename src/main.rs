@@ -453,25 +453,29 @@ impl VcfServer {
             filter_engine.evaluate(&filter, &v.raw_row).unwrap_or(false)
         });
 
-        let first_variant = first_variant.ok_or_else(|| {
-            if filter.trim().is_empty() {
+        // If no variants found, return graceful response (consistent with get_next_variant)
+        if first_variant.is_none() {
+            let reference_genome = index.get_reference_genome();
+            let response = StreamQueryResponse {
+                variant: None,
+                session_id: None,
+                has_more: false,
+                reference_genome,
+                matched_chromosome: Some(matched_chr_name),
+            };
+
+            let payload = serde_json::to_value(response).map_err(|e| {
                 McpError::internal_error(
-                    format!(
-                        "No variants found in region {}:{}-{}",
-                        requested_chromosome, start, end
-                    ),
+                    format!("Failed to serialize start_region_query response: {}", e),
                     None,
                 )
-            } else {
-                McpError::internal_error(
-                    format!(
-                        "No variants matching filter '{}' found in region {}:{}-{}",
-                        filter, requested_chromosome, start, end
-                    ),
-                    None,
-                )
-            }
-        })?;
+            })?;
+
+            let content = Content::json(payload)?;
+            return Ok(CallToolResult::success(vec![content]));
+        }
+
+        let first_variant = first_variant.unwrap();
 
         // Create session
         let session_id = Uuid::new_v4().to_string();

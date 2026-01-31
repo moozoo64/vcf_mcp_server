@@ -584,6 +584,43 @@ async fn test_filter_with_multiple_variants() {
     }
 }
 
+#[tokio::test]
+async fn test_streaming_session_all_variants_filtered_out() {
+    let vcf_path = PathBuf::from("sample_data/sample.compressed.vcf.gz");
+    if !vcf_path.exists() {
+        eprintln!("Warning: Sample VCF file not found, skipping test");
+        return;
+    }
+
+    let index = load_vcf(&vcf_path, false, false).expect("Failed to load VCF file");
+    let (variants, matched_chr) = index.query_by_region("20", 14000, 18000);
+    let filter_engine = index.filter_engine();
+
+    assert_eq!(matched_chr, Some("20".to_string()));
+    assert!(
+        variants.len() > 0,
+        "Region should contain variants before filtering"
+    );
+
+    // Apply impossible filter that excludes all variants
+    let filter = "QUAL > 999999";
+    let filtered_variants: Vec<_> = variants
+        .into_iter()
+        .filter(|v| filter_engine.evaluate(filter, &v.raw_row).unwrap_or(false))
+        .collect();
+
+    // This simulates what start_region_query does
+    assert_eq!(
+        filtered_variants.len(),
+        0,
+        "All variants should be filtered out"
+    );
+
+    // The new implementation should return a graceful response:
+    // { variant: None, session_id: None, has_more: false }
+    // rather than an error
+}
+
 // ============================================================================
 // Error Handling Tests
 // ============================================================================
