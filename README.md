@@ -1,7 +1,18 @@
 # VCF MCP Server: Exposing Variant Calling Format files to LLMs for Analysis
-_No warranty express or implied. This was totally vibe-coded while chronicly sleep-deprived and watching Bluey and Tremors 5._ Use at your own risk. AFAICT it works and outputs line up with what I get through traditional tools.
 
-**Current Version**: 0.2.0 | [Changelog](CHANGELOG.md)
+**Original Author**: [Jade Auer (jda)](https://github.com/jda)  
+**Original Repository**: https://github.com/jda/vcf_mcp_server  
+**License**: MIT License
+
+_Original disclaimer: No warranty express or implied. This was totally vibe-coded while chronicly sleep-deprived and watching Bluey and Tremors 5._ Use at your own risk. AFAICT it works and outputs line up with what I get through traditional tools.
+
+**Current Version**: 0.2.0-fork | [Changelog](CHANGELOG.md)
+
+---
+
+**About This Fork**: This is a fork of Jade's original work with additional features vibe-coded by Michael Simmons using Claude Sonnet 4.5 via GitHub Copilot. Enhancements include streaming API, statistics tool, advanced filter support, comprehensive documentation, and more. See [CHANGELOG.md](CHANGELOG.md) for complete details. These changes are being prepared for potential contribution back to the upstream repository.
+
+---
 
 ## Overview
 

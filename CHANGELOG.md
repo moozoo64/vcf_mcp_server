@@ -5,7 +5,9 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [0.2.0] - 2024
+## [0.2.0-fork] - 2024
+
+**Note**: This version represents enhancements made in this fork by Michael Simmons, built on top of Jade Auer's v0.1.0 release.
 
 ### Added
 - **Streaming Query API**: New stateful streaming tools for processing large genomic regions
@@ -49,6 +51,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Memory efficiency improvements in statistics calculation
 
 ## [0.1.0] - 2024
+
+**Note**: Original release by Jade Auer. The following is documentation of the original v0.1.0 features for reference.
 
 ### Added
 - Initial release of VCF MCP Server
@@ -97,7 +101,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Upgrade Notes
 
-### Migrating from v0.1.0 to v0.2.0
+### Migrating from v0.1.0 to v0.2.0-fork
 
 **Filter Syntax Changes**:
 ```javascript
@@ -124,5 +128,5 @@ Key changes:
 - Use `get_statistics` tool for comprehensive variant analysis
 - Access embedded docs via `get_documentation` tool
 
-[0.2.0]: https://github.com/jda/vcf_mcp_server/compare/v0.1.0...v0.2.0
+[0.2.0-fork]: https://github.com/jda/vcf_mcp_server/compare/v0.1.0...develop
 [0.1.0]: https://github.com/jda/vcf_mcp_server/releases/tag/v0.1.0
