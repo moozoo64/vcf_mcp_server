@@ -513,12 +513,8 @@ async fn test_streaming_multiallelic_variant() {
 // Filter Evaluation Tests (for Streaming)
 // ============================================================================
 
-// TODO: Update to use new FilterEngine API
-/*
 #[tokio::test]
 async fn test_filter_evaluation_with_streaming_data() {
-    use vcf_mcp_server::vcf::evaluate_filter;
-
     let vcf_path = PathBuf::from("sample_data/sample.compressed.vcf.gz");
     if !vcf_path.exists() {
         eprintln!("Warning: Sample VCF file not found, skipping test");
@@ -527,6 +523,7 @@ async fn test_filter_evaluation_with_streaming_data() {
 
     let index = load_vcf(&vcf_path, false, false).expect("Failed to load VCF file");
     let (variants, _) = index.query_by_region("20", 14000, 18000);
+    let filter_engine = index.filter_engine();
 
     assert!(variants.len() >= 1, "Need at least one variant for testing");
     let variant = &variants[0];
@@ -535,41 +532,35 @@ async fn test_filter_evaluation_with_streaming_data() {
     if let Some(quality) = variant.quality {
         let filter = format!("QUAL > {}", quality - 1.0);
         assert!(
-            evaluate_filter(variant, &filter).unwrap(),
+            filter_engine.evaluate(&filter, &variant.raw_row).unwrap(),
             "QUAL should be > quality-1"
         );
 
         let filter_fail = format!("QUAL > {}", quality + 1.0);
         assert!(
-            !evaluate_filter(variant, &filter_fail).unwrap(),
+            !filter_engine
+                .evaluate(&filter_fail, &variant.raw_row)
+                .unwrap(),
             "QUAL should not be > quality+1"
         );
     }
 
-    // Test FILTER field
+    // Test FILTER field (needs quotes now)
     if !variant.filter.is_empty() {
         let filter_value = &variant.filter[0];
-        let filter = format!("FILTER == {}", filter_value);
+        let filter = format!("FILTER == \"{}\"", filter_value);
         assert!(
-            evaluate_filter(variant, &filter).unwrap(),
+            filter_engine.evaluate(&filter, &variant.raw_row).unwrap(),
             "FILTER should match"
         );
     }
 
-    // Test empty filter (should always pass)
-    assert!(
-        evaluate_filter(variant, "").unwrap(),
-        "Empty filter should always pass"
-    );
+    // Note: vcf-filter doesn't support empty filters like the old implementation
+    // Empty filter is handled at the application level by skipping filter evaluation
 }
-*/
 
-// TODO: Update to use new FilterEngine API
-/*
 #[tokio::test]
 async fn test_filter_with_multiple_variants() {
-    use vcf_mcp_server::vcf::evaluate_filter;
-
     let vcf_path = PathBuf::from("sample_data/sample.compressed.vcf.gz");
     if !vcf_path.exists() {
         eprintln!("Warning: Sample VCF file not found, skipping test");
@@ -578,12 +569,13 @@ async fn test_filter_with_multiple_variants() {
 
     let index = load_vcf(&vcf_path, false, false).expect("Failed to load VCF file");
     let (variants, _) = index.query_by_region("20", 14000, 18000);
+    let filter_engine = index.filter_engine();
 
-    // Filter for FILTER == PASS
-    let filter = "FILTER == PASS";
+    // Filter for FILTER == "PASS" (with quotes in new syntax)
+    let filter = "FILTER == \"PASS\"";
     let passing_variants: Vec<_> = variants
         .iter()
-        .filter(|v| evaluate_filter(v, filter).unwrap_or(false))
+        .filter(|v| filter_engine.evaluate(filter, &v.raw_row).unwrap_or(false))
         .collect();
 
     // Verify all filtered variants have PASS filter
@@ -591,7 +583,6 @@ async fn test_filter_with_multiple_variants() {
         assert!(variant.filter.contains(&"PASS".to_string()));
     }
 }
-*/
 
 // ============================================================================
 // Error Handling Tests
@@ -785,12 +776,8 @@ fn test_chromosome_x_query() {
     }
 }
 
-// TODO: Update to use new FilterEngine API
-/*
 #[test]
 fn test_variant_with_missing_quality() {
-    use vcf_mcp_server::vcf::evaluate_filter;
-
     let vcf_path = PathBuf::from("sample_data/sample.compressed.vcf.gz");
     if !vcf_path.exists() {
         eprintln!("Warning: Sample VCF file not found, skipping test");
@@ -799,15 +786,20 @@ fn test_variant_with_missing_quality() {
 
     let index = load_vcf(&vcf_path, false, false).expect("Failed to load VCF file");
     let (variants, _) = index.query_by_region("20", 1, 10_000_000);
+    let filter_engine = index.filter_engine();
 
     // Find a variant with missing quality (if any)
     let variant_missing_qual = variants.iter().find(|v| v.quality.is_none());
     if let Some(variant) = variant_missing_qual {
         // QUAL filter should not match if quality is missing
-        assert!(!evaluate_filter(variant, "QUAL > 0").unwrap());
+        // vcf-filter may return false or error for missing field comparison
+        let result = filter_engine.evaluate("QUAL > 0", &variant.raw_row);
+        assert!(
+            result.is_err() || !result.unwrap(),
+            "QUAL filter should fail or return false for missing quality"
+        );
     }
 }
-*/
 
 #[test]
 fn test_variant_with_no_alternates() {
