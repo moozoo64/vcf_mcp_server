@@ -394,6 +394,25 @@ impl VcfServer {
     }
 
     #[tool(
+        description = "Get comprehensive summary statistics for the VCF file. Returns variant counts, quality statistics, filter distributions, chromosome information, and variant type breakdown. This requires scanning the entire VCF file and may take a few seconds for large files."
+    )]
+    async fn get_statistics(&self) -> Result<CallToolResult, McpError> {
+        let stats = {
+            let index = self.index.lock().await;
+            index.compute_statistics().map_err(|e| {
+                McpError::internal_error(format!("Failed to compute statistics: {}", e), None)
+            })?
+        };
+
+        let payload = serde_json::to_value(stats).map_err(|e| {
+            McpError::internal_error(format!("Failed to serialize statistics: {}", e), None)
+        })?;
+
+        let content = Content::json(payload)?;
+        Ok(CallToolResult::success(vec![content]))
+    }
+
+    #[tool(
         description = "Start a new streaming query session for a genomic region. Returns the first variant and a session_id for subsequent calls. Use get_next_variant to retrieve remaining variants one at a time. Optionally filter variants using a filter expression (e.g., 'QUAL > 30 AND FILTER == PASS')."
     )]
     async fn start_region_query(

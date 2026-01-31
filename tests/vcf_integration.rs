@@ -904,3 +904,102 @@ fn test_vcf_header_retrieval() {
         "Header should contain column headers"
     );
 }
+
+#[test]
+fn test_vcf_statistics_computation() {
+    let vcf_path = PathBuf::from("sample_data/sample.compressed.vcf.gz");
+    if !vcf_path.exists() {
+        eprintln!("Warning: Sample VCF file not found, skipping test");
+        return;
+    }
+
+    let index = load_vcf(&vcf_path, false, false).expect("Failed to load VCF file");
+    let stats = index
+        .compute_statistics()
+        .expect("Failed to compute statistics");
+
+    // Basic metadata checks
+    assert!(
+        !stats.file_format.is_empty(),
+        "File format should be present"
+    );
+    assert!(
+        !stats.reference_genome.is_empty(),
+        "Reference genome should be present"
+    );
+    assert!(
+        stats.chromosome_count > 0,
+        "Should have at least one chromosome"
+    );
+    assert!(
+        stats.chromosomes.contains(&"20".to_string()),
+        "Should include chromosome 20"
+    );
+
+    // Variant count checks
+    assert!(stats.total_variants > 0, "Should have at least one variant");
+    assert!(
+        stats.variants_per_chromosome.len() > 0,
+        "Should have per-chromosome counts"
+    );
+
+    // Verify per-chromosome counts sum to total
+    let sum: u64 = stats.variants_per_chromosome.values().sum();
+    assert_eq!(
+        sum, stats.total_variants,
+        "Per-chromosome counts should sum to total"
+    );
+
+    // ID statistics
+    let total_with_ids = stats.unique_ids;
+    assert!(
+        total_with_ids + stats.missing_ids == stats.total_variants,
+        "Unique IDs + missing IDs should equal total variants"
+    );
+
+    // Quality statistics (sample file should have quality scores)
+    if let Some(qual_stats) = stats.quality_stats {
+        assert!(qual_stats.min >= 0.0, "Min quality should be non-negative");
+        assert!(qual_stats.max >= qual_stats.min, "Max should be >= min");
+        assert!(
+            qual_stats.mean >= 0.0,
+            "Mean quality should be non-negative"
+        );
+        assert!(
+            qual_stats.mean >= qual_stats.min && qual_stats.mean <= qual_stats.max,
+            "Mean should be between min and max"
+        );
+    }
+
+    // Filter counts
+    assert!(!stats.filter_counts.is_empty(), "Should have filter counts");
+    // Note: Filter count sum may be less than total_variants if some variants have no filter,
+    // or greater if some variants have multiple filters
+    let total_filter_entries: u64 = stats.filter_counts.values().sum();
+    eprintln!(
+        "Filter entries: {}, Total variants: {}",
+        total_filter_entries, stats.total_variants
+    );
+
+    // Variant type statistics
+    let type_total = stats.variant_types.snps
+        + stats.variant_types.insertions
+        + stats.variant_types.deletions
+        + stats.variant_types.mnps
+        + stats.variant_types.complex;
+    assert_eq!(
+        type_total, stats.total_variants,
+        "Variant type counts should sum to total variants"
+    );
+
+    // Print statistics for manual verification
+    eprintln!("VCF Statistics:");
+    eprintln!("  Total variants: {}", stats.total_variants);
+    eprintln!("  Unique IDs: {}", stats.unique_ids);
+    eprintln!("  Missing IDs: {}", stats.missing_ids);
+    eprintln!("  SNPs: {}", stats.variant_types.snps);
+    eprintln!("  Insertions: {}", stats.variant_types.insertions);
+    eprintln!("  Deletions: {}", stats.variant_types.deletions);
+    eprintln!("  MNPs: {}", stats.variant_types.mnps);
+    eprintln!("  Complex: {}", stats.variant_types.complex);
+}

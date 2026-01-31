@@ -72,8 +72,42 @@ pub struct ContigInfo {
     pub id: String,
 }
 
+// VCF summary statistics structures
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct VcfStatistics {
+    pub file_format: String,
+    pub reference_genome: String,
+    pub chromosome_count: usize,
+    pub sample_count: usize,
+    pub chromosomes: Vec<String>,
+    pub total_variants: u64,
+    pub variants_per_chromosome: HashMap<String, u64>,
+    pub unique_ids: u64,
+    pub missing_ids: u64,
+    pub quality_stats: Option<QualityStats>,
+    pub filter_counts: HashMap<String, u64>,
+    pub variant_types: VariantTypeStats,
+}
+
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct QualityStats {
+    pub min: f32,
+    pub max: f32,
+    pub mean: f32,
+}
+
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct VariantTypeStats {
+    pub snps: u64,
+    pub insertions: u64,
+    pub deletions: u64,
+    pub mnps: u64,
+    pub complex: u64,
+}
+
 // VCF index structure - supports both tabix (.tbi) and CSI (.csi) indices for efficient queries
 pub struct VcfIndex {
+    path: PathBuf,
     index: GenomicIndex,
     header: vcf::Header,
     reader: Mutex<vcf::io::Reader<bgzf::io::Reader<File>>>,
@@ -246,6 +280,121 @@ impl VcfIndex {
     // Get reference to the filter engine for evaluating filters
     pub fn filter_engine(&self) -> Arc<FilterEngine> {
         Arc::clone(&self.filter_engine)
+    }
+
+    // Compute comprehensive statistics about the VCF file
+    pub fn compute_statistics(&self) -> std::io::Result<VcfStatistics> {
+        // Fast metadata from header
+        let metadata = self.get_metadata();
+        let chromosomes = self.get_available_chromosomes();
+        
+        // Unique IDs from existing id_index (no scan needed)
+        let unique_ids = self.id_index.len() as u64;
+        
+        // Counters for single-pass scan
+        let mut total_variants = 0u64;
+        let mut variants_per_chromosome: HashMap<String, u64> = HashMap::new();
+        let mut missing_ids = 0u64;
+        let mut filter_counts: HashMap<String, u64> = HashMap::new();
+        
+        // Quality statistics (running calculations)
+        let mut qual_min = f32::INFINITY;
+        let mut qual_max = f32::NEG_INFINITY;
+        let mut qual_sum = 0.0;
+        let mut qual_count = 0u64;
+        
+        // Variant type counters
+        let mut snps = 0u64;
+        let mut insertions = 0u64;
+        let mut deletions = 0u64;
+        let mut mnps = 0u64;
+        let mut complex = 0u64;
+        
+        // Single-pass scan through all variants
+        let file = File::open(&self.path)?;
+        let mut reader = vcf::io::Reader::new(bgzf::io::Reader::new(file));
+        let _ = reader.read_header()?; // Skip header
+        
+        for record in reader.records().flatten() {
+            if let Ok(variant) = parse_variant_record(&record, &self.header) {
+                total_variants += 1;
+                
+                // Count per chromosome
+                *variants_per_chromosome
+                    .entry(variant.chromosome.clone())
+                    .or_insert(0) += 1;
+                
+                // Count missing IDs
+                if variant.id == "." {
+                    missing_ids += 1;
+                }
+                
+                // Track quality stats
+                if let Some(qual) = variant.quality {
+                    qual_min = qual_min.min(qual);
+                    qual_max = qual_max.max(qual);
+                    qual_sum += qual as f64;
+                    qual_count += 1;
+                }
+                
+                // Count filter categories
+                for filter in &variant.filter {
+                    *filter_counts.entry(filter.clone()).or_insert(0) += 1;
+                }
+                
+                // Classify variant type
+                let ref_len = variant.reference.len();
+                if variant.alternate.len() == 1 {
+                    let alt_len = variant.alternate[0].len();
+                    if ref_len == 1 && alt_len == 1 {
+                        snps += 1;
+                    } else if ref_len < alt_len {
+                        insertions += 1;
+                    } else if ref_len > alt_len {
+                        deletions += 1;
+                    } else if ref_len == alt_len && ref_len > 1 {
+                        mnps += 1;
+                    } else {
+                        complex += 1;
+                    }
+                } else {
+                    // Multiple alternates or complex
+                    complex += 1;
+                }
+            }
+        }
+        
+        // Compute quality statistics
+        let quality_stats = if qual_count > 0 {
+            Some(QualityStats {
+                min: qual_min,
+                max: qual_max,
+                mean: (qual_sum / qual_count as f64) as f32,
+            })
+        } else {
+            None
+        };
+        
+        Ok(VcfStatistics {
+            file_format: metadata.file_format,
+            reference_genome: self.get_reference_genome(),
+            chromosome_count: chromosomes.len(),
+            sample_count: metadata.samples.len(),
+            chromosomes,
+            total_variants,
+            variants_per_chromosome,
+            unique_ids,
+            missing_ids,
+            quality_stats,
+            filter_counts,
+            variant_types: VariantTypeStats {
+                snps,
+                insertions,
+                deletions,
+                mnps,
+                complex,
+            },
+        })
     }
 }
 
@@ -743,6 +892,7 @@ pub fn load_vcf(path: &PathBuf, debug: bool, save_index: bool) -> std::io::Resul
     );
 
     Ok(VcfIndex {
+        path: path.clone(),
         index: genomic_index,
         header,
         reader: Mutex::new(reader),
