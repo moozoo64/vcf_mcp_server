@@ -13,7 +13,7 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use tokio::sync::Mutex;
 use uuid::Uuid;
-use vcf::{evaluate_filter, format_variant, load_vcf, Variant, VcfIndex};
+use vcf::{format_variant, load_vcf, Variant, VcfIndex};
 
 // Embed documentation at compile time
 const README_DOCS: &str = include_str!("../README.md");
@@ -406,23 +406,19 @@ impl VcfServer {
         }): Parameters<StreamRegionParams>,
     ) -> Result<CallToolResult, McpError> {
         // Validate filter expression before processing
+        let index = self.index.lock().await;
+
         if !filter.trim().is_empty() {
-            let dummy = Variant {
-                chromosome: "1".to_string(),
-                position: 1,
-                id: ".".to_string(),
-                reference: "A".to_string(),
-                alternate: vec!["T".to_string()],
-                quality: Some(30.0),
-                filter: vec!["PASS".to_string()],
-                info: std::collections::HashMap::new(),
-            };
-            if let Err(e) = evaluate_filter(&dummy, &filter) {
+            let filter_engine = index.filter_engine();
+            drop(index); // Drop lock before potentially expensive operation
+            if let Err(e) = filter_engine.parse_filter(&filter) {
                 return Err(McpError::invalid_params(
                     format!("Invalid filter expression: {}", e),
                     None,
                 ));
             }
+        } else {
+            drop(index); // Drop lock if no validation needed
         }
 
         let index = self.index.lock().await;
@@ -450,10 +446,11 @@ impl VcfServer {
 
         // Query the region and find first variant that passes filter
         let (region_variants, _) = index.query_by_region(&matched_chr_name, start, end);
+        let filter_engine = index.filter_engine();
 
         let first_variant = region_variants.into_iter().map(format_variant).find(|v| {
-            // Filter validation already done above, this should never error
-            evaluate_filter(v, &filter).unwrap_or(false)
+            // Use vcf-filter to evaluate filter expression
+            filter_engine.evaluate(&filter, &v.raw_row).unwrap_or(false)
         });
 
         let first_variant = first_variant.ok_or_else(|| {
@@ -551,10 +548,11 @@ impl VcfServer {
         // Query from next position after last returned variant
         let next_pos = last_pos + 1;
         let (variants, _) = index.query_by_region(&chromosome, next_pos, end);
+        let filter_engine = index.filter_engine();
 
         // Find next variant that passes filter
         let next_variant = variants.into_iter().map(format_variant).find(|v| {
-            evaluate_filter(v, &filter).unwrap_or(false) // Treat filter errors as non-match
+            filter_engine.evaluate(&filter, &v.raw_row).unwrap_or(false) // Treat filter errors as non-match
         });
 
         if next_variant.is_none() {
@@ -592,7 +590,7 @@ impl VcfServer {
         // Check if there are more variants after this one that pass the filter
         let (peek_variants, _) = index.query_by_region(&chromosome, new_position + 1, end);
         let has_more = peek_variants.into_iter().map(format_variant).any(|v| {
-            evaluate_filter(&v, &filter).unwrap_or(false) // Treat filter errors as non-match
+            filter_engine.evaluate(&filter, &v.raw_row).unwrap_or(false) // Treat filter errors as non-match
         });
 
         let reference_genome = index.get_reference_genome();

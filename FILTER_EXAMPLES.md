@@ -1,203 +1,211 @@
 # Variant Filter Examples
 
-The `evaluate_filter()` function allows filtering variants based on VCF fields using simple expressions.
+**⚠️ Breaking Change in v0.2.0**: The filter system has been upgraded to use the [vcf-filter](https://github.com/moozoo64/vcf-filter) library, which provides a more powerful expression language with INFO field access, annotation queries, and proper operator precedence.
 
-## Function Signature
+## Filter Syntax
 
-```rust
-pub fn evaluate_filter(variant: &Variant, filter_expr: &str) -> bool
-```
+Filters use a SQL-like expression language to query variants based on VCF fields.
 
 ## Supported Fields
 
-| Field | Aliases | Description | Type |
-|-------|---------|-------------|------|
-| `CHROM` | `CHROMOSOME` | Chromosome name | String |
-| `POS` | `POSITION` | Genomic position | Numeric |
-| `ID` | - | Variant ID | String |
-| `REF` | `REFERENCE` | Reference allele | String |
-| `ALT` | `ALTERNATE` | Alternate alleles (comma-separated) | String |
-| `QUAL` | `QUALITY` | Quality score | Numeric |
-| `FILTER` | - | Filter status (comma-separated) | String |
+| Field Category | Examples | Description |
+|---------------|----------|-------------|
+| **Built-in VCF Columns** | `CHROM`, `POS`, `ID`, `REF`, `ALT`, `QUAL`, `FILTER` | Standard VCF columns |
+| **INFO Fields** | `DP`, `AF`, `AC`, `AN`, etc. | Any INFO field from VCF header |
+| **Annotations** | `ANN[0].Gene_Name`, `ANN[*].Annotation_Impact` | Structured annotations (SnpEff) |
+| **LOF/NMD** | `LOF[0].Gene_Name`, `NMD[*].Percent_affected` | Loss-of-function annotations |
 
-## Supported Operators
+## Comparison Operators
 
-### Comparison Operators
-- `==` - Equals (case-insensitive)
-- `!=` - Not equals
-- `>` - Greater than (numeric)
-- `<` - Less than (numeric)
-- `>=` - Greater than or equal (numeric)
-- `<=` - Less than or equal (numeric)
+| Operator | Example | Description |
+|----------|---------|-------------|
+| `==` | `FILTER == "PASS"` | Equal (strings must be quoted) |
+| `!=` | `CLNSIG != "Benign"` | Not equal |
+| `>` | `QUAL > 30` | Greater than |
+| `<` | `DP < 100` | Less than |
+| `>=` | `QUAL >= 30` | Greater than or equal |
+| `<=` | `DP <= 50` | Less than or equal |
+| `contains` | `CLNDN contains "cancer"` | Substring match |
 
-### String Operators
-- `contains` - String contains substring (case-insensitive)
-- `in` - Value is in comma-separated list (case-insensitive)
+## Logical Operators
 
-### Logical Operators
-- `AND` - Both conditions must be true
-- `OR` - Either condition must be true
+| Operator | Example | Description |
+|----------|---------|-------------|
+| `&&` | `QUAL > 30 && DP >= 10` | Logical AND (both must be true) |
+| `\|\|` | `CLNSIG == "Pathogenic" \|\| CLNSIG == "Likely_pathogenic"` | Logical OR (either must be true) |
+| `!` | `!exists(LOF)` | Logical NOT |
+| `()` | `(A \|\| B) && C` | Grouping for precedence |
 
-## Usage Examples
+## Functions
 
-### Basic Comparisons
+| Function | Example | Description |
+|----------|---------|-------------|
+| `exists()` | `exists(CLNSIG)` | True if field is present and not missing |
 
-```rust
-use vcf::{Variant, evaluate_filter};
+## Basic Examples
 
-// Quality score filtering
-evaluate_filter(&variant, "QUAL > 30");
-evaluate_filter(&variant, "QUAL >= 20");
-evaluate_filter(&variant, "QUAL < 50");
+### Quality and Depth Filtering
 
-// Position filtering
-evaluate_filter(&variant, "POS == 14370");
-evaluate_filter(&variant, "POS > 1000000");
-
-// Chromosome filtering
-evaluate_filter(&variant, "CHROM == chr1");
-evaluate_filter(&variant, "CHROM == 20");
+```
+QUAL > 30
+QUAL >= 20 && DP >= 10
 ```
 
-### String Matching
+### Position Filtering
 
-```rust
-// ID contains substring
-evaluate_filter(&variant, "ID contains rs");
-evaluate_filter(&variant, "ID contains 6054257");
-
-// Reference/Alternate allele matching
-evaluate_filter(&variant, "REF == A");
-evaluate_filter(&variant, "ALT contains G");
-
-// Filter status
-evaluate_filter(&variant, "FILTER == PASS");
-evaluate_filter(&variant, "FILTER != FAIL");
+```
+POS > 1000000
+POS >= 43044295 && POS <= 43125483
 ```
 
-### In Operator
+### Chromosome Filtering
 
-```rust
-// Check if value is in list
-evaluate_filter(&variant, "FILTER in PASS,LowQual");
-evaluate_filter(&variant, "CHROM in 1,2,3,4,5");
-evaluate_filter(&variant, "REF in A,T,G,C");
+```
+CHROM == "chr1"
+CHROM == "20"
 ```
 
-### Logical Combinations
+### ID and Allele Matching
 
-```rust
-// AND - both must be true
-evaluate_filter(&variant, "QUAL > 30 AND FILTER == PASS");
-evaluate_filter(&variant, "CHROM == 17 AND POS >= 43044295 AND POS <= 43125483");
-
-// OR - either must be true
-evaluate_filter(&variant, "CHROM == 13 OR CHROM == 17"); // BRCA1/BRCA2
-evaluate_filter(&variant, "QUAL > 50 OR FILTER == PASS");
-
-// Complex combinations (left-to-right evaluation)
-evaluate_filter(&variant, "CHROM == 20 AND POS > 60000 AND QUAL > 20");
+```
+ID contains "rs"
+REF == "A"
+ALT contains "G"
 ```
 
-### Range Queries
+### Filter Status
 
-```rust
-// Position range
-evaluate_filter(&variant, "POS >= 1000000 AND POS <= 2000000");
-
-// Quality range
-evaluate_filter(&variant, "QUAL > 20 AND QUAL < 100");
-
-// Exclude range
-evaluate_filter(&variant, "POS < 1000 OR POS > 5000");
+```
+FILTER == "PASS"
+FILTER != "FAIL"
 ```
 
-### Real-World Examples
+## INFO Field Examples
 
-```rust
-// High-quality passing variants
-evaluate_filter(&variant, "QUAL > 30 AND FILTER == PASS");
+### Read Depth
 
-// BRCA1 region variants (chromosome 17)
-evaluate_filter(&variant, "CHROM == 17 AND POS >= 43044295 AND POS <= 43125483");
-
-// SNPs only (single nucleotide)
-evaluate_filter(&variant, "REF in A,T,G,C AND ALT in A,T,G,C");
-
-// Known variants (has rsID)
-evaluate_filter(&variant, "ID contains rs");
-
-// Multi-allelic variants
-evaluate_filter(&variant, "ALT contains ,");
-
-// Specific chromosomes only
-evaluate_filter(&variant, "CHROM in 1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20,21,22,X,Y");
+```
+DP >= 30
+DP > 10 && DP < 100
 ```
 
-### Edge Cases
+### Allele Frequency
 
-```rust
-// Empty filter (passes all variants)
-evaluate_filter(&variant, "");
-evaluate_filter(&variant, "   ");
-
-// Case insensitive
-evaluate_filter(&variant, "chrom == CHR1");  // Same as CHROM == chr1
-evaluate_filter(&variant, "Filter == pass");  // Same as FILTER == PASS
-
-// Missing quality (None)
-// Returns false for numeric comparisons if quality is None
-evaluate_filter(&variant, "QUAL > 30");  // false if quality is None
+```
+AF > 0.01
+AF >= 0.05 && AF <= 0.95
 ```
 
-## Integration Example
+### Allele Count
 
-```rust
-use vcf::{VcfIndex, evaluate_filter};
-
-fn filter_variants(index: &VcfIndex, chromosome: &str, start: u64, end: u64, filter: &str) -> Vec<Variant> {
-    let (variants, _) = index.query_by_region(chromosome, start, end);
-    
-    variants
-        .into_iter()
-        .filter(|v| evaluate_filter(v, filter))
-        .collect()
-}
-
-// Usage
-let high_quality = filter_variants(
-    &index, 
-    "20", 
-    60000, 
-    70000, 
-    "QUAL > 30 AND FILTER == PASS"
-);
-
-println!("Found {} high-quality variants", high_quality.len());
+```
+AC >= 1
+AN == 2
 ```
 
-## Performance Notes
+## Annotation Examples
 
-- **String comparisons** are case-insensitive (converted to lowercase)
-- **Numeric comparisons** require both values to parse as f64
-- **AND/OR evaluation** is left-to-right (no operator precedence)
-- **Short-circuit evaluation**: AND stops on first false, OR stops on first true
-- Empty filters always return `true` (pass all variants)
+### Gene-Specific Queries
 
-## Limitations
+```
+ANN[0].Gene_Name == "BRCA1"
+ANN[*].Gene_Name == "TP53"
+```
 
-- No parentheses for grouping (e.g., `(A OR B) AND C` not supported)
-- No operator precedence (AND and OR have same priority)
-- No negation operator (use `!=` instead)
-- INFO fields not yet supported (only base VCF fields)
-- No regex matching (only exact match and contains)
+### Impact Filtering
 
-## Future Enhancements
+```
+ANN[*].Annotation_Impact == "HIGH"
+ANN[*].Annotation_Impact == "HIGH" || ANN[*].Annotation_Impact == "MODERATE"
+```
 
-Possible additions:
-- INFO field support (e.g., `INFO.DP > 10`)
-- Parentheses for grouping
-- Regex matching (`REF matches [ACGT]{3,}`)
-- NOT operator
-- EXISTS operator (e.g., `ID exists`)
-- Array operations for multi-allelic variants
+### Annotation Type
+
+```
+ANN[0].Annotation == "missense_variant"
+ANN[*].Annotation contains "frameshift"
+```
+
+## Clinical Significance Examples
+
+### ClinVar Filtering
+
+```
+CLNSIG == "Pathogenic"
+CLNSIG == "Pathogenic" || CLNSIG == "Likely_pathogenic"
+CLNDN contains "cancer"
+CLNDN contains "BRCA" || CLNDN contains "breast"
+```
+
+## Complex Combinations
+
+### Multi-Gene Filtering
+
+```
+QUAL > 30 && FILTER == "PASS" && (ANN[*].Gene_Name == "BRCA1" || ANN[*].Gene_Name == "BRCA2")
+```
+
+### Quality + Annotation
+
+```
+QUAL >= 30 && DP >= 10 && ANN[*].Annotation_Impact == "HIGH"
+```
+
+### Disease Association
+
+```
+FILTER == "PASS" && (CLNDN contains "cancer" || CLNDN contains "carcinoma")
+```
+
+### Position Range with Quality
+
+```
+CHROM == "17" && POS >= 43044295 && POS <= 43125483 && QUAL > 20
+```
+
+### Complex Clinical Query
+
+```
+(CLNSIG == "Pathogenic" || CLNSIG == "Likely_pathogenic") && 
+QUAL > 30 && 
+DP >= 20 && 
+(ANN[*].Annotation_Impact == "HIGH" || ANN[*].Annotation_Impact == "MODERATE")
+```
+
+## Field Existence Checking
+
+```
+exists(CLNSIG)
+exists(DP)
+!exists(LOF)
+```
+
+## Important Notes
+
+1. **String values must be quoted**: Use `"PASS"` not `PASS`
+2. **Use `&&` and `||`**: Not `AND` and `OR` (breaking change from v0.1.0)
+3. **Operator precedence**: Use parentheses `()` for complex logic
+4. **Array access**: Use `[0]` for first element, `[*]` to match any element
+5. **Case sensitivity**: Field names are case-sensitive, string comparisons respect quotes
+6. **INFO fields**: Auto-detected from VCF header metadata
+7. **Empty filter**: An empty filter expression (`""`) passes all variants
+
+## Migration from v0.1.0
+
+| Old Syntax (v0.1.0) | New Syntax (v0.2.0) |
+|---------------------|---------------------|
+| `QUAL > 30 AND FILTER == PASS` | `QUAL > 30 && FILTER == "PASS"` |
+| `CHROM == chr1 OR CHROM == chr2` | `CHROM == "chr1" \|\| CHROM == "chr2"` |
+| `FILTER in PASS,LowQual` | `FILTER == "PASS" \|\| FILTER == "LowQual"` |
+| Not supported | `DP >= 30` (INFO fields) |
+| Not supported | `ANN[*].Gene_Name == "BRCA1"` (annotations) |
+| Not supported | `(A \|\| B) && C` (parentheses) |
+
+## Error Handling
+
+Invalid filter expressions will be rejected with descriptive error messages:
+
+- **Unknown field**: Field not in VCF header
+- **Parse error**: Invalid syntax
+- **Type mismatch**: Comparing incompatible types
+- **Invalid index**: Array index out of bounds

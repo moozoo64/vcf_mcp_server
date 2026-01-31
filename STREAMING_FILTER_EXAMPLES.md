@@ -1,398 +1,482 @@
-# Streaming Query Filter Examples
+# Streaming Variant Filter Examples
 
-The streaming query tools (`start_region_query` and `get_next_variant`) now support filtering variants based on VCF field expressions.
+**⚠️ Breaking Change in v0.2.0**: The filter system has been upgraded to use the [vcf-filter](https://github.com/moozoo64/vcf-filter) library. See [FILTER_EXAMPLES.md](FILTER_EXAMPLES.md) for syntax reference.
 
-## Basic Usage
+This document demonstrates using filters with the streaming variant query tools (`stream_region_query` and `get_next_variant`).
 
-### No Filter (All Variants)
+## Streaming Query Workflow
 
-```javascript
-// Returns all variants in the region
-const session = await start_region_query({
-  chromosome: "20",
-  start: 60000,
-  end: 70000
-});
+1. **Initialize stream** with `stream_region_query`:
+   - Specify region (chromosome + range)
+   - Optional filter expression
+   - Returns `session_id` for subsequent queries
 
-// Or explicitly empty filter
-const session = await start_region_query({
-  chromosome: "20",
-  start: 60000,
-  end: 70000,
-  filter: ""
-});
-```
+2. **Retrieve variants** with `get_next_variant`:
+   - Use `session_id` from stream initialization
+   - Optional `count` parameter (default 1)
+   - Returns next matching variants or `no_more_variants: true`
 
-### With Filter
+## Basic Streaming Examples
 
-```javascript
-// Only high-quality passing variants
-const session = await start_region_query({
-  chromosome: "20",
-  start: 60000,
-  end: 70000,
-  filter: "QUAL > 30 AND FILTER == PASS"
-});
+### Stream All Variants in Region
 
-// First variant returned already matches filter
-console.log(session.variant); // { quality: 35, filter: ["PASS"], ... }
-
-// Continue getting filtered variants
-let next = await get_next_variant({ session_id: session.session_id });
-// All subsequent variants also match the filter
-```
-
-## Filter Examples
-
-### Quality-Based Filtering
-
-```javascript
-// High quality variants only
-await start_region_query({
-  chromosome: "1",
-  start: 1000000,
-  end: 2000000,
-  filter: "QUAL > 50"
-});
-
-// Quality range
-await start_region_query({
-  chromosome: "chr1",
-  start: 1000000,
-  end: 2000000,
-  filter: "QUAL >= 20 AND QUAL <= 100"
-});
-```
-
-### Position-Based Filtering
-
-```javascript
-// First half of region only
-await start_region_query({
-  chromosome: "20",
-  start: 60000,
-  end: 70000,
-  filter: "POS < 65000"
-});
-
-// Exclude specific position range
-await start_region_query({
-  chromosome: "20",
-  start: 60000,
-  end: 70000,
-  filter: "POS < 62000 OR POS > 68000"
-});
-```
-
-### Filter Status
-
-```javascript
-// Only passing variants
-await start_region_query({
-  chromosome: "17",
-  start: 43044295,
-  end: 43125483,
-  filter: "FILTER == PASS"
-});
-
-// Multiple acceptable filter values
-await start_region_query({
-  chromosome: "17",
-  start: 43044295,
-  end: 43125483,
-  filter: "FILTER in PASS,LowQual"
-});
-```
-
-### ID-Based Filtering
-
-```javascript
-// Only known variants (has rsID)
-await start_region_query({
-  chromosome: "20",
-  start: 60000,
-  end: 70000,
-  filter: "ID contains rs"
-});
-
-// Specific variant ID pattern
-await start_region_query({
-  chromosome: "20",
-  start: 60000,
-  end: 70000,
-  filter: "ID contains 6054"
-});
-```
-
-### Allele Filtering
-
-```javascript
-// SNPs with specific alternate allele
-await start_region_query({
-  chromosome: "20",
-  start: 60000,
-  end: 70000,
-  filter: "ALT contains A"
-});
-
-// Specific reference allele
-await start_region_query({
-  chromosome: "20",
-  start: 60000,
-  end: 70000,
-  filter: "REF == G AND ALT contains A"
-});
-```
-
-## Complex Filters
-
-### Multiple Criteria
-
-```javascript
-// High-quality SNPs only
-await start_region_query({
-  chromosome: "1",
-  start: 1000000,
-  end: 2000000,
-  filter: "QUAL > 30 AND FILTER == PASS AND REF in A,T,G,C AND ALT in A,T,G,C"
-});
-
-// BRCA1 region, high-quality variants
-await start_region_query({
-  chromosome: "17",
-  start: 43044295,
-  end: 43125483,
-  filter: "QUAL > 50 AND FILTER == PASS AND ID contains rs"
-});
-```
-
-### OR Logic for Chromosome Sets
-
-```javascript
-// Variants on chromosome 13 or 17 (BRCA genes)
-await start_region_query({
-  chromosome: "13",
-  start: 1,
-  end: 115169878,
-  filter: "CHROM == 13 OR CHROM == 17"
-});
-```
-
-## Complete Workflow Examples
-
-### Example 1: Find High-Quality Variants Only
-
-```javascript
-// Start session with filter
-const session = await start_region_query({
-  chromosome: "20",
-  start: 60000,
-  end: 70000,
-  filter: "QUAL > 30 AND FILTER == PASS"
-});
-
-const highQualityVariants = [];
-
-if (session.variant) {
-  highQualityVariants.push(session.variant);
-}
-
-// Get all remaining high-quality variants
-let sid = session.session_id;
-while (sid) {
-  const next = await get_next_variant({ session_id: sid });
-  if (next.variant) {
-    highQualityVariants.push(next.variant);
-  }
-  sid = next.session_id;
-}
-
-console.log(`Found ${highQualityVariants.length} high-quality variants`);
-// All variants in the array match the filter
-```
-
-### Example 2: Early Stopping with Filter
-
-```javascript
-// Find first 5 known SNPs with high quality
-const session = await start_region_query({
-  chromosome: "1",
-  start: 1000000,
-  end: 2000000,
-  filter: "QUAL > 50 AND ID contains rs AND REF in A,T,G,C"
-});
-
-const knownSNPs = [];
-let current = session;
-
-while (current.session_id && knownSNPs.length < 5) {
-  if (current.variant) {
-    knownSNPs.push(current.variant);
-  }
-  
-  if (knownSNPs.length < 5 && current.has_more) {
-    current = await get_next_variant({ session_id: current.session_id });
-  } else {
-    break;
-  }
-}
-
-// Clean up if we stopped early
-if (current.session_id) {
-  await close_query_session({ session_id: current.session_id });
-}
-
-console.log(`Found ${knownSNPs.length} matching SNPs`);
-```
-
-### Example 3: Compare Filtered vs Unfiltered
-
-```javascript
-// Count all variants
-const allSession = await start_region_query({
-  chromosome: "20",
-  start: 60000,
-  end: 70000
-});
-
-let allCount = 0;
-let current = allSession;
-while (current.session_id) {
-  if (current.variant) allCount++;
-  current = await get_next_variant({ session_id: current.session_id });
-}
-
-// Count high-quality variants
-const filteredSession = await start_region_query({
-  chromosome: "20",
-  start: 60000,
-  end: 70000,
-  filter: "QUAL > 30 AND FILTER == PASS"
-});
-
-let filteredCount = 0;
-current = filteredSession;
-while (current.session_id) {
-  if (current.variant) filteredCount++;
-  current = await get_next_variant({ session_id: current.session_id });
-}
-
-console.log(`Total variants: ${allCount}`);
-console.log(`High-quality variants: ${filteredCount}`);
-console.log(`Filtered out: ${allCount - filteredCount}`);
-```
-
-## Error Handling
-
-### No Variants Match Filter
-
-```javascript
-try {
-  const session = await start_region_query({
-    chromosome: "20",
-    start: 60000,
-    end: 61000,
-    filter: "QUAL > 1000" // Unrealistic quality threshold
-  });
-} catch (error) {
-  console.error(error);
-  // Error: "No variants matching filter 'QUAL > 1000' found in region 20:60000-61000"
+```json
+{
+  "chromosome": "20",
+  "start": 1000000,
+  "end": 2000000
 }
 ```
 
-### Invalid Filter Expression
+Response:
+```json
+{
+  "session_id": "abc123",
+  "filter": null,
+  "message": "Stream initialized for region chr20:1000000-2000000"
+}
+```
 
-```javascript
-try {
-  const session = await start_region_query({
-    chromosome: "20",
-    start: 60000,
-    end: 70000,
-    filter: "INVALID SYNTAX"
-  });
-} catch (error) {
-  // Will return no variants (filter doesn't match any)
-  console.log("Filter might be invalid or too strict");
+### Stream High-Quality Variants
+
+```json
+{
+  "chromosome": "20",
+  "start": 1000000,
+  "end": 2000000,
+  "filter": "QUAL > 30"
+}
+```
+
+### Stream PASS Variants with Depth
+
+```json
+{
+  "chromosome": "17",
+  "start": 43044295,
+  "end": 43125483,
+  "filter": "FILTER == \"PASS\" && DP >= 20"
+}
+```
+
+## Fetching Next Variants
+
+### Get Single Variant
+
+```json
+{
+  "session_id": "abc123"
+}
+```
+
+Response:
+```json
+{
+  "variants": [{
+    "chromosome": "20",
+    "position": 1234567,
+    "id": "rs123456",
+    "reference": "A",
+    "alternate": ["G"],
+    "quality": 45.2,
+    "filter": ["PASS"],
+    "info": {"DP": 35, "AF": 0.5}
+  }],
+  "no_more_variants": false
+}
+```
+
+### Get Multiple Variants
+
+```json
+{
+  "session_id": "abc123",
+  "count": 10
+}
+```
+
+Returns up to 10 variants at once.
+
+## INFO Field Filtering Examples
+
+### Read Depth Filter
+
+```json
+{
+  "chromosome": "20",
+  "start": 1000000,
+  "end": 2000000,
+  "filter": "DP >= 30"
+}
+```
+
+### Allele Frequency Range
+
+```json
+{
+  "chromosome": "20",
+  "start": 1000000,
+  "end": 2000000,
+  "filter": "AF >= 0.01 && AF <= 0.99"
+}
+```
+
+### Multiple INFO Fields
+
+```json
+{
+  "chromosome": "20",
+  "start": 1000000,
+  "end": 2000000,
+  "filter": "DP >= 20 && AC >= 1 && AF > 0.05"
+}
+```
+
+## Annotation Filtering Examples
+
+### High Impact Variants
+
+```json
+{
+  "chromosome": "17",
+  "start": 43044295,
+  "end": 43125483,
+  "filter": "ANN[*].Annotation_Impact == \"HIGH\""
+}
+```
+
+### Gene-Specific Stream
+
+```json
+{
+  "chromosome": "17",
+  "start": 43044295,
+  "end": 43125483,
+  "filter": "ANN[*].Gene_Name == \"BRCA1\""
+}
+```
+
+### Variant Type Filter
+
+```json
+{
+  "chromosome": "20",
+  "start": 1000000,
+  "end": 2000000,
+  "filter": "ANN[*].Annotation contains \"frameshift\""
+}
+```
+
+## Clinical Filtering Examples
+
+### Pathogenic Variants
+
+```json
+{
+  "chromosome": "17",
+  "start": 43044295,
+  "end": 43125483,
+  "filter": "CLNSIG == \"Pathogenic\" || CLNSIG == \"Likely_pathogenic\""
+}
+```
+
+### Disease Association
+
+```json
+{
+  "chromosome": "17",
+  "start": 43044295,
+  "end": 43125483,
+  "filter": "CLNDN contains \"cancer\" && FILTER == \"PASS\""
+}
+```
+
+## Complex Streaming Filters
+
+### Multi-Condition Clinical Query
+
+```json
+{
+  "chromosome": "17",
+  "start": 43044295,
+  "end": 43125483,
+  "filter": "(CLNSIG == \"Pathogenic\" || CLNSIG == \"Likely_pathogenic\") && QUAL > 30 && DP >= 20"
+}
+```
+
+### Combined Gene and Impact Filter
+
+```json
+{
+  "chromosome": "17",
+  "start": 43000000,
+  "end": 44000000,
+  "filter": "(ANN[*].Gene_Name == \"BRCA1\" || ANN[*].Gene_Name == \"BRCA2\") && (ANN[*].Annotation_Impact == \"HIGH\" || ANN[*].Annotation_Impact == \"MODERATE\")"
+}
+```
+
+### Quality + Annotation Stream
+
+```json
+{
+  "chromosome": "20",
+  "start": 1000000,
+  "end": 2000000,
+  "filter": "FILTER == \"PASS\" && QUAL >= 30 && DP >= 15 && ANN[*].Annotation_Impact == \"HIGH\""
+}
+```
+
+## Paginated Query Pattern
+
+### Initialize Stream
+
+```json
+// Tool: stream_region_query
+{
+  "chromosome": "20",
+  "start": 1000000,
+  "end": 5000000,
+  "filter": "QUAL > 30 && DP >= 20"
+}
+```
+
+Response:
+```json
+{
+  "session_id": "session_xyz",
+  "filter": "QUAL > 30 && DP >= 20",
+  "message": "Stream initialized for region chr20:1000000-5000000 with filter"
+}
+```
+
+### Fetch First Batch (100 variants)
+
+```json
+// Tool: get_next_variant
+{
+  "session_id": "session_xyz",
+  "count": 100
+}
+```
+
+Response:
+```json
+{
+  "variants": [ /* 100 variants */ ],
+  "no_more_variants": false
+}
+```
+
+### Fetch Next Batch
+
+```json
+// Tool: get_next_variant
+{
+  "session_id": "session_xyz",
+  "count": 100
+}
+```
+
+Response:
+```json
+{
+  "variants": [ /* 100 more variants */ ],
+  "no_more_variants": false
+}
+```
+
+### Detect End of Stream
+
+```json
+// Tool: get_next_variant
+{
+  "session_id": "session_xyz",
+  "count": 100
+}
+```
+
+Response:
+```json
+{
+  "variants": [ /* remaining variants (could be < 100) */ ],
+  "no_more_variants": true
 }
 ```
 
 ## Performance Considerations
 
-### Filter at Query Time vs Post-Processing
+### Large Region Streaming
 
-**Using streaming filters** (recommended):
-```javascript
-// Server-side filtering - only matching variants returned
-const session = await start_region_query({
-  chromosome: "1",
-  start: 1000000,
-  end: 10000000, // Large region
-  filter: "QUAL > 50 AND FILTER == PASS"
-});
+For very large regions or whole chromosomes, use streaming with filters to reduce memory:
 
-// Network transfer: Only ~100s of variants
-// Memory usage: O(1) - one variant at a time
-```
-
-**Post-processing** (less efficient):
-```javascript
-// Get all variants, filter client-side
-const session = await start_region_query({
-  chromosome: "1",
-  start: 1000000,
-  end: 10000000
-});
-
-const filtered = [];
-let current = session;
-while (current.session_id) {
-  if (current.variant && current.variant.quality > 50) {
-    filtered.push(current.variant);
-  }
-  current = await get_next_variant({ session_id: current.session_id });
-}
-
-// Network transfer: All ~1000s of variants
-// More API calls and data transfer
-```
-
-### Memory Efficiency
-
-```javascript
-// Process large region with complex filter - still O(1) memory
-const session = await start_region_query({
-  chromosome: "1",
-  start: 1,
-  end: 248956422, // Entire chromosome 1
-  filter: "QUAL > 50 AND FILTER == PASS AND ID contains rs"
-});
-
-// Each call returns one variant, doesn't load entire chromosome
-let count = 0;
-let current = session;
-while (current.session_id) {
-  if (current.variant) {
-    processVariant(current.variant); // Process incrementally
-    count++;
-  }
-  current = await get_next_variant({ session_id: current.session_id });
+```json
+{
+  "chromosome": "20",
+  "start": 1,
+  "end": 64444167,
+  "filter": "QUAL > 50 && DP >= 30"
 }
 ```
 
-## Supported Filter Syntax
+Then fetch in batches:
+```json
+{
+  "session_id": "session_xyz",
+  "count": 1000
+}
+```
 
-See [FILTER_EXAMPLES.md](FILTER_EXAMPLES.md) for complete filter syntax documentation.
+### Targeted Gene Queries
 
-**Quick reference:**
-- **Fields**: CHROM, POS, ID, REF, ALT, QUAL, FILTER
-- **Operators**: `==`, `!=`, `<`, `>`, `<=`, `>=`, `contains`, `in`
-- **Logic**: `AND`, `OR`
-- **Case-insensitive**: All string comparisons
+For gene-specific analysis, use tight position ranges with annotation filters:
 
-## Tips
+```json
+{
+  "chromosome": "17",
+  "start": 43044295,
+  "end": 43125483,
+  "filter": "ANN[*].Gene_Name == \"BRCA1\" && ANN[*].Annotation_Impact == \"HIGH\""
+}
+```
 
-1. **Empty filter passes all variants** - omit `filter` parameter or use `""`
-2. **Filters are case-insensitive** - `"CHROM == chr1"` same as `"chrom == CHR1"`
-3. **Filters persist in session** - same filter applies to all `get_next_variant` calls
-4. **No variants error** - descriptive message indicates filter vs no variants in region
-5. **Performance** - Server-side filtering is more efficient than client-side for large regions
+## Real-World Use Cases
+
+### Cancer Variant Screening
+
+```json
+{
+  "chromosome": "17",
+  "start": 1,
+  "end": 83257441,
+  "filter": "(CLNDN contains \"cancer\" || CLNDN contains \"carcinoma\") && (CLNSIG == \"Pathogenic\" || CLNSIG == \"Likely_pathogenic\") && FILTER == \"PASS\""
+}
+```
+
+### Population Genetics Study
+
+```json
+{
+  "chromosome": "20",
+  "start": 1000000,
+  "end": 10000000,
+  "filter": "AF >= 0.01 && AF <= 0.99 && DP >= 30 && QUAL > 30"
+}
+```
+
+### Loss-of-Function Variants
+
+```json
+{
+  "chromosome": "17",
+  "start": 43000000,
+  "end": 44000000,
+  "filter": "exists(LOF) && ANN[*].Gene_Name == \"BRCA1\" && FILTER == \"PASS\""
+}
+```
+
+### Rare Variant Analysis
+
+```json
+{
+  "chromosome": "20",
+  "start": 1000000,
+  "end": 5000000,
+  "filter": "AF < 0.01 && DP >= 20 && QUAL > 30 && ANN[*].Annotation_Impact == \"HIGH\""
+}
+```
+
+## Error Handling
+
+### Invalid Filter Syntax
+
+Request:
+```json
+{
+  "chromosome": "20",
+  "start": 1000000,
+  "end": 2000000,
+  "filter": "QUAL > 30 AND DP >= 10"
+}
+```
+
+Response:
+```json
+{
+  "error": "Filter parse error: expected '&&' not 'AND'"
+}
+```
+
+### Unknown Field
+
+Request:
+```json
+{
+  "chromosome": "20",
+  "start": 1000000,
+  "end": 2000000,
+  "filter": "UNKNOWN_FIELD > 30"
+}
+```
+
+Response:
+```json
+{
+  "error": "Unknown field: UNKNOWN_FIELD not found in VCF header"
+}
+```
+
+### Invalid Session ID
+
+Request:
+```json
+{
+  "session_id": "invalid_session_xyz"
+}
+```
+
+Response:
+```json
+{
+  "error": "Invalid session ID: invalid_session_xyz"
+}
+```
+
+## Migration from v0.1.0
+
+### Old Syntax (v0.1.0)
+
+```json
+{
+  "chromosome": "20",
+  "start": 1000000,
+  "end": 2000000,
+  "filter": "QUAL > 30 AND FILTER == PASS"
+}
+```
+
+### New Syntax (v0.2.0)
+
+```json
+{
+  "chromosome": "20",
+  "start": 1000000,
+  "end": 2000000,
+  "filter": "QUAL > 30 && FILTER == \"PASS\""
+}
+```
+
+Key changes:
+- `AND` → `&&`
+- `OR` → `||`
+- String values must be quoted: `"PASS"` not `PASS`
+- New capabilities: INFO fields, annotations, parentheses
+
+## Best Practices
+
+1. **Use specific filters**: Narrow results at stream initialization to reduce network transfer
+2. **Batch fetches**: Use `count` parameter to fetch multiple variants per request
+3. **Check `no_more_variants`**: Stop fetching when stream is exhausted
+4. **Validate filters first**: Test filter syntax on small regions before large queries
+5. **Combine filters**: Use `&&` to combine quality, depth, and annotation filters
+6. **Use parentheses**: Group complex logic for clarity and correct precedence
+7. **Quote strings**: Always quote string values to avoid parse errors

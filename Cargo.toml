@@ -1,6 +1,6 @@
 [package]
 name = "vcf_mcp_server"
-version = "0.1.0"
+version = "0.2.0"
 edition = "2021"
 license = "MIT"
 
@@ -32,6 +32,7 @@ hyper-util = { version = "0.1.19", features = [
 axum = "0.8.8"
 anyhow = "1"
 uuid = { version = "1.0", features = ["v4"] }
+vcf-filter = { git = "https://github.com/moozoo64/vcf-filter" }
 
 [dev-dependencies]
 criterion = "0.8.1"

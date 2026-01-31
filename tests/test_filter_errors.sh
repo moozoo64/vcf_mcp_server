@@ -86,26 +86,26 @@ EOF
 
 # Test 1: Invalid field name
 test_filter_error \
-    "CHROMOSOME == 20" \
-    "Unsupported field" \
+    "CHROMOSOME == \"20\"" \
+    "Unknown field\|Parse error" \
     "Invalid field name (CHROMOSOME instead of CHROM)"
 
 # Test 2: Missing operator
 test_filter_error \
     "QUAL 30" \
-    "Unsupported operator" \
+    "Parse error\|expected" \
     "Missing comparison operator"
 
-# Test 3: Invalid field in AND expression
+# Test 3: Invalid field in AND expression (using new && syntax)
 test_filter_error \
-    "QUAL > 20 AND CHROMSOME == 20" \
-    "Unsupported field" \
-    "Typo in field name within AND expression (CHROMSOME)"
+    "QUAL > 20 && CHROMSOME == \"20\"" \
+    "Unknown field\|Parse error" \
+    "Typo in field name within && expression (CHROMSOME)"
 
 # Test 4: Invalid field in complex expression
 test_filter_error \
-    "POSITION > 14000 AND FILTER == PASS" \
-    "Unsupported field" \
+    "POSITION > 14000 && FILTER == \"PASS\"" \
+    "Unknown field\|Parse error" \
     "Invalid field name POSITION (should be POS)"
 
 echo -e "${GREEN}Filter error testing complete!${NC}"

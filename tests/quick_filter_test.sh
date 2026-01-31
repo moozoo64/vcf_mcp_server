@@ -12,7 +12,7 @@ echo -e "\n1. Testing CHROMOSOME (should be CHROM):"
  sleep 0.2;
  echo '{"jsonrpc":"2.0","method":"notifications/initialized"}'; 
  sleep 0.2;
- echo '{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"start_region_query","arguments":{"chromosome":"20","start":14370,"end":17330,"filter":"CHROMOSOME == 20"}}}';
+ echo '{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"start_region_query","arguments":{"chromosome":"20","start":14370,"end":17330,"filter":"CHROMOSOME == \"20\""}}}';
  sleep 0.5) \
  | ./target/release/vcf_mcp_server sample_data/sample.compressed.vcf.gz 2>&1 \
  | tail -1 | jq -r '.error.message' 2>/dev/null
@@ -28,13 +28,13 @@ echo -e "\n2. Testing missing operator (QUAL 30):"
  | ./target/release/vcf_mcp_server sample_data/sample.compressed.vcf.gz 2>&1 \
  | tail -1 | jq -r '.error.message' 2>/dev/null
 
-# Test 3: Typo in AND expression
-echo -e "\n3. Testing typo CHROMSOME in AND:"
+# Test 3: Typo with && operator
+echo -e "\n3. Testing typo CHROMSOME with &&:"
 (echo '{"jsonrpc":"2.0","id":0,"method":"initialize","params":{"protocolVersion":"2024-11-05","capabilities":{},"clientInfo":{"name":"test","version":"1.0.0"}}}'; 
  sleep 0.2;
  echo '{"jsonrpc":"2.0","method":"notifications/initialized"}'; 
  sleep 0.2;
- echo '{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"start_region_query","arguments":{"chromosome":"20","start":14370,"end":17330,"filter":"QUAL > 20 AND CHROMSOME == 20"}}}';
+ echo '{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"start_region_query","arguments":{"chromosome":"20","start":14370,"end":17330,"filter":"QUAL > 20 && CHROMSOME == \"20\""}}}';
  sleep 0.5) \
  | ./target/release/vcf_mcp_server sample_data/sample.compressed.vcf.gz 2>&1 \
  | tail -1 | jq -r '.error.message' 2>/dev/null
