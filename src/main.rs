@@ -394,7 +394,7 @@ impl VcfServer {
     }
 
     #[tool(
-        description = "Get comprehensive summary statistics for the VCF file. Returns variant counts, quality statistics, filter distributions, chromosome information, and variant type breakdown. This requires scanning the entire VCF file and may take a few seconds for large files."
+        description = "Get comprehensive summary statistics for the VCF file. Returns variant counts, quality statistics, filter distributions, chromosome information, and variant type breakdown. Statistics are computed once at server startup and cached for instant retrieval."
     )]
     async fn get_statistics(&self) -> Result<CallToolResult, McpError> {
         let stats = {
