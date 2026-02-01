@@ -68,6 +68,13 @@ struct QueryByIdParams {
 }
 
 #[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
+struct GetHeaderParams {
+    /// Optional search string to filter header lines (e.g., '##INFO', '##contig', '##FILTER'). If provided, only lines containing this string will be returned.
+    #[serde(default)]
+    search: Option<String>,
+}
+
+#[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
 struct StreamRegionParams {
     /// Chromosome name (e.g., '1', '2', 'X', 'chr1')
     chromosome: String,
@@ -376,17 +383,21 @@ impl VcfServer {
     }
 
     #[tool(
-        description = "Get the raw VCF file header containing all metadata, format definitions, and contig information"
+        description = "Get the raw VCF file header containing metadata and format definitions. By default, ##contig lines are excluded to reduce clutter. To include contig definitions, use the search parameter with '##contig'. To filter for specific header types, provide a search string (e.g., '##INFO' for INFO definitions, '##FILTER' for filter definitions, '##FORMAT' for format definitions)."
     )]
-    async fn get_vcf_header(&self) -> Result<CallToolResult, McpError> {
+    async fn get_vcf_header(
+        &self,
+        Parameters(params): Parameters<GetHeaderParams>,
+    ) -> Result<CallToolResult, McpError> {
         let header_text = {
             let index = self.index.lock().await;
-            index.get_header_string()
+            index.get_header_string(params.search.as_deref())
         };
 
         let payload = serde_json::json!({
             "header": header_text,
             "line_count": header_text.lines().count(),
+            "search_applied": params.search,
         });
 
         let content = Content::json(payload)?;
@@ -1090,7 +1101,7 @@ mod tests {
     #[test]
     fn test_get_vcf_header() {
         let index = create_test_index();
-        let header_string = index.get_header_string();
+        let header_string = index.get_header_string(None);
 
         // Header should not be empty
         assert!(!header_string.is_empty(), "Header should not be empty");

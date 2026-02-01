@@ -892,7 +892,7 @@ fn test_vcf_header_retrieval() {
     }
 
     let index = load_vcf(&vcf_path, false, false).expect("Failed to load VCF file");
-    let header = index.get_header_string();
+    let header = index.get_header_string(None);
 
     assert!(!header.is_empty(), "Header should not be empty");
     assert!(

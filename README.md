@@ -130,15 +130,50 @@ Close an active streaming session and free resources.
 **See [STREAMING.md](STREAMING.md) for detailed streaming API documentation.**
 
 ### 7. `get_vcf_header`
-Get the raw VCF file header text.
+Get the raw VCF file header text. **By default, `##contig` lines are excluded** to reduce clutter. Use the search parameter to filter for specific header types or to include contig definitions.
+
+**Parameters:**
+- `search` (string, optional): Filter string to match header lines (e.g., "##INFO", "##FILTER", "##FORMAT", "##contig")
 
 **Returns:** Header text with line count and reference genome information
 
-**Example:**
+**Examples:**
+
+Get header without contig lines (default):
 ```json
 {
   "name": "get_vcf_header",
   "arguments": {}
+}
+```
+
+Get only contig definitions:
+```json
+{
+  "name": "get_vcf_header",
+  "arguments": {
+    "search": "##contig"
+  }
+}
+```
+
+Get only INFO definitions:
+```json
+{
+  "name": "get_vcf_header",
+  "arguments": {
+    "search": "##INFO"
+  }
+}
+```
+
+Get only FILTER definitions:
+```json
+{
+  "name": "get_vcf_header",
+  "arguments": {
+    "search": "##FILTER"
+  }
 }
 ```
 

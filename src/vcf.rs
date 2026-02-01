@@ -268,11 +268,28 @@ impl VcfIndex {
         )
     }
 
-    pub fn get_header_string(&self) -> String {
+    pub fn get_header_string(&self, search: Option<&str>) -> String {
         let mut buffer = Vec::new();
         let mut writer = vcf::io::Writer::new(&mut buffer);
         if writer.write_header(&self.header).is_ok() {
-            String::from_utf8_lossy(&buffer).to_string()
+            let full_header = String::from_utf8_lossy(&buffer).to_string();
+
+            // Apply search filter if provided, otherwise exclude ##contig lines by default
+            if let Some(search_str) = search {
+                full_header
+                    .lines()
+                    .filter(|line| line.contains(search_str))
+                    .collect::<Vec<_>>()
+                    .join("\n")
+            } else {
+                // Exclude ##contig lines by default (noodles doesn't include them anyway)
+                // This prevents clutter while keeping useful metadata
+                full_header
+                    .lines()
+                    .filter(|line| !line.starts_with("##contig"))
+                    .collect::<Vec<_>>()
+                    .join("\n")
+            }
         } else {
             "Error formatting header".to_string()
         }
