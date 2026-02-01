@@ -178,7 +178,10 @@ Get only FILTER definitions:
 ```
 
 ### 8. `get_statistics`
-Get comprehensive statistics about the VCF file including variant counts, quality metrics, and variant type distributions.
+Get comprehensive statistics about the VCF file including variant counts, quality metrics, and variant type distributions. **By default, `variants_per_chromosome` is limited to the top 25 chromosomes by variant count** to reduce response size.
+
+**Parameters:**
+- `max_chromosomes` (integer, optional): Maximum number of chromosomes to include in `variants_per_chromosome`. Default is 25. Set to 0 to include all chromosomes.
 
 **Returns:** 
 - Total variant count
@@ -186,13 +189,35 @@ Get comprehensive statistics about the VCF file including variant counts, qualit
 - Quality score statistics (min, max, mean)
 - Depth statistics
 - Filter status distribution
-- Chromosome-specific variant counts
+- Chromosome-specific variant counts (limited to top N chromosomes)
 
-**Example:**
+**Examples:**
+
+Get statistics with default limits (top 25 chromosomes):
 ```json
 {
   "name": "get_statistics",
   "arguments": {}
+}
+```
+
+Get statistics with all chromosomes included:
+```json
+{
+  "name": "get_statistics",
+  "arguments": {
+    "max_chromosomes": 0
+  }
+}
+```
+
+Get statistics with top 10 chromosomes only:
+```json
+{
+  "name": "get_statistics",
+  "arguments": {
+    "max_chromosomes": 10
+  }
 }
 ```
 

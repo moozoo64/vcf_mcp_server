@@ -75,6 +75,17 @@ struct GetHeaderParams {
 }
 
 #[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
+struct GetStatisticsParams {
+    /// Maximum number of chromosomes to include in variants_per_chromosome. Default is 25 (top chromosomes by variant count). Set to 0 to include all chromosomes.
+    #[serde(default = "default_max_chromosomes")]
+    max_chromosomes: usize,
+}
+
+fn default_max_chromosomes() -> usize {
+    25
+}
+
+#[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
 struct StreamRegionParams {
     /// Chromosome name (e.g., '1', '2', 'X', 'chr1')
     chromosome: String,
@@ -405,15 +416,35 @@ impl VcfServer {
     }
 
     #[tool(
-        description = "Get comprehensive summary statistics for the VCF file. Returns variant counts, quality statistics, filter distributions, chromosome information, and variant type breakdown. Statistics are computed once at server startup and cached for instant retrieval."
+        description = "Get comprehensive summary statistics for the VCF file. Returns variant counts, quality statistics, filter distributions, chromosome information, and variant type breakdown. By default, limits variants_per_chromosome to top 25 chromosomes to reduce response size. Set max_chromosomes=0 to include all chromosomes. Statistics are computed once at server startup and cached for instant retrieval."
     )]
-    async fn get_statistics(&self) -> Result<CallToolResult, McpError> {
-        let stats = {
+    async fn get_statistics(
+        &self,
+        Parameters(params): Parameters<GetStatisticsParams>,
+    ) -> Result<CallToolResult, McpError> {
+        let mut stats = {
             let index = self.index.lock().await;
             index.compute_statistics().map_err(|e| {
                 McpError::internal_error(format!("Failed to compute statistics: {}", e), None)
             })?
         };
+
+        // Limit variants_per_chromosome if requested
+        if params.max_chromosomes > 0
+            && stats.variants_per_chromosome.len() > params.max_chromosomes
+        {
+            // Sort chromosomes by variant count (descending) and keep top N
+            let mut chr_counts: Vec<_> = stats.variants_per_chromosome.iter().collect();
+            chr_counts.sort_by(|a, b| b.1.cmp(a.1));
+
+            let limited: HashMap<String, u64> = chr_counts
+                .into_iter()
+                .take(params.max_chromosomes)
+                .map(|(k, v)| (k.clone(), *v))
+                .collect();
+
+            stats.variants_per_chromosome = limited;
+        }
 
         let payload = serde_json::to_value(stats).map_err(|e| {
             McpError::internal_error(format!("Failed to serialize statistics: {}", e), None)

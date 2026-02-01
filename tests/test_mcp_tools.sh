@@ -27,7 +27,7 @@ echo -e "${BLUE}  Testing All MCP Tools${NC}"
 echo -e "${BLUE}======================================${NC}"
 
 # Test with timeout to prevent hanging
-response=$(timeout 5 $BINARY "$VCF_FILE" 2>/dev/null <<'EOF' || true
+response=$(timeout 10 $BINARY "$VCF_FILE" 2>/dev/null <<'EOF' || true
 {"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2024-11-05","capabilities":{},"clientInfo":{"name":"test","version":"1.0"}}}
 {"jsonrpc":"2.0","method":"notifications/initialized","params":{}}
 {"jsonrpc":"2.0","id":2,"method":"tools/list","params":{}}
@@ -37,22 +37,24 @@ response=$(timeout 5 $BINARY "$VCF_FILE" 2>/dev/null <<'EOF' || true
 {"jsonrpc":"2.0","id":6,"method":"tools/call","params":{"name":"get_vcf_header","arguments":{}}}
 {"jsonrpc":"2.0","id":7,"method":"tools/call","params":{"name":"start_region_query","arguments":{"chromosome":"20","start":14000,"end":18000,"filter":""}}}
 {"jsonrpc":"2.0","id":8,"method":"tools/call","params":{"name":"get_documentation","arguments":{"doc_type":"readme"}}}
-{"jsonrpc":"2.0","id":9,"method":"resources/list","params":{}}
-{"jsonrpc":"2.0","id":10,"method":"resources/read","params":{"uri":"vcf://header"}}
+{"jsonrpc":"2.0","id":9,"method":"tools/call","params":{"name":"get_statistics","arguments":{}}}
+{"jsonrpc":"2.0","id":10,"method":"tools/call","params":{"name":"get_statistics","arguments":{"max_chromosomes":1}}}
+{"jsonrpc":"2.0","id":11,"method":"resources/list","params":{}}
+{"jsonrpc":"2.0","id":12,"method":"resources/read","params":{"uri":"vcf://header"}}
 EOF
 )
 
 # Filter out non-JSON lines (loading messages)
 json_lines=$(echo "$response" | grep -E '^\{' || true)
 
-# Count the number of JSON responses (should be 10: init + 9 requests)
+# Count the number of JSON responses (should be 12: init + 11 requests)
 response_count=$(echo "$json_lines" | wc -l)
 
 echo -e "\n${BLUE}Test: JSON Response Count${NC}"
-if [ "$response_count" -eq "10" ]; then
-    echo -e "${GREEN}✓ Received 10 JSON responses${NC}"
+if [ "$response_count" -eq "12" ]; then
+    echo -e "${GREEN}✓ Received 12 JSON responses${NC}"
 else
-    echo -e "${RED}✗ Expected 10 responses, got $response_count${NC}"
+    echo -e "${RED}✗ Expected 12 responses, got $response_count${NC}"
 fi
 
 # Extract the tools list response (id:2)
@@ -137,8 +139,8 @@ if [ ! -z "$doc_response" ]; then
     fi
 fi
 
-# Check resources/list response (id:9)
-resources_response=$(echo "$json_lines" | grep '"id":9' || true)
+# Check resources/list response (id:11)
+resources_response=$(echo "$json_lines" | grep '"id":11' || true)
 if [ ! -z "$resources_response" ]; then
     echo -e "\n${BLUE}Test: resources/list${NC}"
     resource_count=$(echo "$resources_response" | jq -r '.result.resources | length' 2>/dev/null || echo "0")
@@ -149,14 +151,38 @@ if [ ! -z "$resources_response" ]; then
     fi
 fi
 
-# Check resources/read response (id:10)
-read_response=$(echo "$json_lines" | grep '"id":10' || true)
+# Check resources/read response (id:12)
+read_response=$(echo "$json_lines" | grep '"id":12' || true)
 if [ ! -z "$read_response" ]; then
     echo -e "\n${BLUE}Test: resources/read (vcf://header)${NC}"
     if echo "$read_response" | jq -e '.result.contents[0].text' | grep -q "##fileformat=VCF" 2>/dev/null; then
         echo -e "${GREEN}✓ Resource read successfully${NC}"
     else
         echo -e "${RED}✗ Failed to read resource${NC}"
+    fi
+fi
+
+# Check get_statistics response (id:9)
+stats_response=$(echo "$json_lines" | grep '"id":9' || true)
+if [ ! -z "$stats_response" ]; then
+    echo -e "\n${BLUE}Test: get_statistics (default)${NC}"
+    total_variants=$(echo "$stats_response" | jq -r '.result.content[0].text | fromjson | .total_variants' 2>/dev/null || echo "0")
+    if [ "$total_variants" -gt "0" ]; then
+        echo -e "${GREEN}✓ Statistics returned ($total_variants variants)${NC}"
+    else
+        echo -e "${RED}✗ No statistics returned${NC}"
+    fi
+fi
+
+# Check get_statistics with max_chromosomes response (id:10)
+stats_limited_response=$(echo "$json_lines" | grep '"id":10' || true)
+if [ ! -z "$stats_limited_response" ]; then
+    echo -e "\n${BLUE}Test: get_statistics (max_chromosomes=1)${NC}"
+    chr_count=$(echo "$stats_limited_response" | jq -r '.result.content[0].text | fromjson | .variants_per_chromosome | length' 2>/dev/null || echo "0")
+    if [ "$chr_count" -eq "1" ]; then
+        echo -e "${GREEN}✓ Chromosome limiting works (got $chr_count chromosome)${NC}"
+    else
+        echo -e "${RED}✗ Expected 1 chromosome, got $chr_count${NC}"
     fi
 fi
 
