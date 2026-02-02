@@ -1136,7 +1136,8 @@ fn save_tabix_index_to_disk(
 }
 
 // Helper function to atomically save CSI index to disk
-// Save CSI index to disk with atomic write
+// Save CSI index to disk with atomic write (currently unused but provided for future functionality)
+#[allow(dead_code)]
 fn save_csi_index_to_disk(
     index: &csi::Index,
     csi_path: &PathBuf,
