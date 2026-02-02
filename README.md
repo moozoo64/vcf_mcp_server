@@ -325,4 +325,13 @@ See [sample_data/README.md](sample_data/README.md) for complete attribution and 
 
 ## License
 
-MIT
+MIT License - see [LICENSE](LICENSE) for details.
+
+This is a fork of [jda/vcf_mcp_server](https://github.com/jda/vcf_mcp_server) with enhancements including:
+- CSI index support for large chromosomes
+- Atomic index saving to prevent corruption
+- Streaming API for large genomic regions
+- Comprehensive statistics tool
+- Advanced filter support
+- Improved chromosome name handling
+- Additional test coverage and documentation
