@@ -62,3 +62,21 @@ jobs:
       - uses: Swatinem/rust-cache@51dda28b917a50812be2827c6ba2930ce4df144a
       - name: Build
         run: cargo build --release --verbose
+
+  integration:
+    name: Integration Tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@ff7abcd0c3c05ccf6adc123a8cd1fd4fb30fb493
+        with:
+          lfs: true
+      - uses: dtolnay/rust-toolchain@6d653acede28d24f02e3cd41383119e8b1b35921
+        with:
+          toolchain: stable
+      - uses: Swatinem/rust-cache@51dda28b917a50812be2827c6ba2930ce4df144a
+      - name: Build release binary
+        run: cargo build --release --verbose
+      - name: Run integration tests
+        run: |
+          chmod +x tests/test_server.sh
+          ./tests/test_server.sh
