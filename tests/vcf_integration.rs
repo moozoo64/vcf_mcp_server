@@ -694,39 +694,34 @@ fn test_query_empty_id() {
 
 #[test]
 fn test_index_files_created() {
+    use std::fs;
+    use tempfile::TempDir;
+
     let vcf_path = PathBuf::from("sample_data/sample.compressed.vcf.gz");
     if !vcf_path.exists() {
         eprintln!("Warning: Sample VCF file not found, skipping test");
         return;
     }
 
-    // Load VCF with index saving enabled
-    let _index = load_vcf(&vcf_path, false, false).expect("Failed to load VCF file");
+    // Create a temporary directory for testing
+    let temp_dir = TempDir::new().expect("Failed to create temp dir");
+    let temp_vcf_path = temp_dir.path().join("test.vcf.gz");
 
-    // Check for genomic index (either .tbi or .csi)
-    // Note: extensions should be .vcf.gz.tbi or .vcf.gz.csi, not replacing .gz
-    let mut tbi_path = vcf_path.clone();
-    tbi_path.set_file_name(format!(
-        "{}.tbi",
-        vcf_path.file_name().unwrap().to_string_lossy()
-    ));
-    let mut csi_path = vcf_path.clone();
-    csi_path.set_file_name(format!(
-        "{}.csi",
-        vcf_path.file_name().unwrap().to_string_lossy()
-    ));
-    let has_genomic_index = tbi_path.exists() || csi_path.exists();
-    assert!(
-        has_genomic_index,
-        "Should create genomic index (.tbi or .csi)"
-    );
+    // Copy VCF file to temp directory (writable location)
+    fs::copy(&vcf_path, &temp_vcf_path).expect("Failed to copy VCF file");
 
-    // Check for ID index
-    let mut idx_path = vcf_path.clone();
-    idx_path.set_file_name(format!(
-        "{}.idx",
-        vcf_path.file_name().unwrap().to_string_lossy()
-    ));
+    // Copy existing CSI index so we test the "load existing genomic index, create ID index" path
+    let csi_src = PathBuf::from("sample_data/sample.compressed.vcf.gz.csi");
+    if csi_src.exists() {
+        let csi_dest = temp_dir.path().join("test.vcf.gz.csi");
+        fs::copy(&csi_src, &csi_dest).expect("Failed to copy CSI index");
+    }
+
+    // Load VCF with index saving enabled (debug=false, save_index=true)
+    let _index = load_vcf(&temp_vcf_path, false, true).expect("Failed to load VCF file");
+
+    // Check for ID index in the temp directory
+    let idx_path = temp_dir.path().join("test.vcf.gz.idx");
     assert!(idx_path.exists(), "Should create ID index (.idx)");
 }
 

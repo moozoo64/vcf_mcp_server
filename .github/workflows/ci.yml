@@ -21,6 +21,8 @@ jobs:
         with:
           toolchain: stable
       - uses: Swatinem/rust-cache@51dda28b917a50812be2827c6ba2930ce4df144a
+      - name: Clean test indices
+        run: ./clean_test_indices.sh
       - name: Run tests
         run: cargo test --verbose
         env:

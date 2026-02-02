@@ -207,11 +207,16 @@ fn test_region_with_very_large_span() {
 
     let index = load_vcf(&vcf_path, false, false).expect("Failed to load VCF file");
 
-    // Very large region
-    let (variants, matched) = index.query_by_region("20", 1, 1_000_000_000);
+    // Very large region covering all variants on chr20 (max position is ~1.2M)
+    // Use 100M as a reasonable upper bound that doesn't exceed tabix/noodles limits
+    let (variants, matched) = index.query_by_region("20", 1, 100_000_000);
     assert_eq!(matched, Some("20".to_string()));
-    // Should find all variants on chromosome 20
-    assert!(!variants.is_empty());
+    // Should find all 6 variants on chromosome 20
+    assert_eq!(
+        variants.len(),
+        6,
+        "Should find all 6 variants on chromosome 20"
+    );
 }
 
 // ============================================================================

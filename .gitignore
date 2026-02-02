@@ -4,8 +4,9 @@
 # Log files
 *.log
 
-# VCF index files
+# VCF index files (generated, not committed)
 *.tbi
+*.csi
 *.idx
 *.stats
 
