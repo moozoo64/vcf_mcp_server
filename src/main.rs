@@ -232,6 +232,26 @@ impl VcfServer {
         }
     }
 
+    /// Helper method to create a CallToolResult with optional debug logging
+    fn create_result_with_logging(
+        &self,
+        content: Content,
+        start_time: std::time::Instant,
+    ) -> Result<CallToolResult, McpError> {
+        if self.debug {
+            let elapsed = start_time.elapsed();
+            let size = serde_json::to_string(&content)
+                .map(|s| s.len())
+                .unwrap_or(0);
+            eprintln!(
+                "[DEBUG] Response time: {:.2}ms | Response size: {} bytes",
+                elapsed.as_secs_f64() * 1000.0,
+                size
+            );
+        }
+        Ok(CallToolResult::success(vec![content]))
+    }
+
     #[tool(
         description = "Query variants at a specific genomic position. NOTE: Coordinates are genome build-specific (GRCh37 vs GRCh38). Check the reference_genome field in the response to verify which build is being queried."
     )]
@@ -242,6 +262,7 @@ impl VcfServer {
             position,
         }): Parameters<QueryByPositionParams>,
     ) -> Result<CallToolResult, McpError> {
+        let start_time = std::time::Instant::now();
         let query_context = PositionQuery {
             chromosome: requested_chromosome.clone(),
             position,
@@ -279,7 +300,7 @@ impl VcfServer {
 
         let content = Content::json(payload)?;
 
-        Ok(CallToolResult::success(vec![content]))
+        self.create_result_with_logging(content, start_time)
     }
 
     #[tool(
@@ -293,6 +314,7 @@ impl VcfServer {
             end,
         }): Parameters<QueryByRegionParams>,
     ) -> Result<CallToolResult, McpError> {
+        let start_time = std::time::Instant::now();
         const MAX_WINDOW: u64 = 10000; // 10 kb maximum region size
 
         // Validate region size
@@ -345,7 +367,7 @@ impl VcfServer {
 
         let content = Content::json(payload)?;
 
-        Ok(CallToolResult::success(vec![content]))
+        self.create_result_with_logging(content, start_time)
     }
 
     #[tool(
@@ -355,6 +377,7 @@ impl VcfServer {
         &self,
         Parameters(QueryByIdParams { id: requested_id }): Parameters<QueryByIdParams>,
     ) -> Result<CallToolResult, McpError> {
+        let start_time = std::time::Instant::now();
         let response = {
             let index = self.index.lock().await;
             let variants = index.query_by_id(&requested_id);
@@ -390,7 +413,7 @@ impl VcfServer {
 
         let content = Content::json(payload)?;
 
-        Ok(CallToolResult::success(vec![content]))
+        self.create_result_with_logging(content, start_time)
     }
 
     #[tool(
@@ -400,6 +423,7 @@ impl VcfServer {
         &self,
         Parameters(params): Parameters<GetHeaderParams>,
     ) -> Result<CallToolResult, McpError> {
+        let start_time = std::time::Instant::now();
         let header_text = {
             let index = self.index.lock().await;
             index.get_header_string(params.search.as_deref())
@@ -412,7 +436,7 @@ impl VcfServer {
         });
 
         let content = Content::json(payload)?;
-        Ok(CallToolResult::success(vec![content]))
+        self.create_result_with_logging(content, start_time)
     }
 
     #[tool(
@@ -422,6 +446,7 @@ impl VcfServer {
         &self,
         Parameters(params): Parameters<GetStatisticsParams>,
     ) -> Result<CallToolResult, McpError> {
+        let start_time = std::time::Instant::now();
         let mut stats = {
             let index = self.index.lock().await;
             index.compute_statistics().map_err(|e| {
@@ -451,7 +476,7 @@ impl VcfServer {
         })?;
 
         let content = Content::json(payload)?;
-        Ok(CallToolResult::success(vec![content]))
+        self.create_result_with_logging(content, start_time)
     }
 
     #[tool(
@@ -466,6 +491,7 @@ impl VcfServer {
             filter,
         }): Parameters<StreamRegionParams>,
     ) -> Result<CallToolResult, McpError> {
+        let start_time = std::time::Instant::now();
         // Validate filter expression before processing
         let index = self.index.lock().await;
 
@@ -533,7 +559,7 @@ impl VcfServer {
             })?;
 
             let content = Content::json(payload)?;
-            return Ok(CallToolResult::success(vec![content]));
+            return self.create_result_with_logging(content, start_time);
         }
 
         let first_variant = first_variant.unwrap();
@@ -573,7 +599,7 @@ impl VcfServer {
         })?;
 
         let content = Content::json(payload)?;
-        Ok(CallToolResult::success(vec![content]))
+        self.create_result_with_logging(content, start_time)
     }
 
     #[tool(
@@ -583,6 +609,7 @@ impl VcfServer {
         &self,
         Parameters(NextVariantParams { session_id }): Parameters<NextVariantParams>,
     ) -> Result<CallToolResult, McpError> {
+        let start_time = std::time::Instant::now();
         let mut sessions = self.query_sessions.lock().await;
 
         let session = sessions.get(&session_id).ok_or_else(|| {
@@ -645,7 +672,7 @@ impl VcfServer {
             })?;
 
             let content = Content::json(payload)?;
-            return Ok(CallToolResult::success(vec![content]));
+            return self.create_result_with_logging(content, start_time);
         }
 
         // Get next variant
@@ -689,7 +716,7 @@ impl VcfServer {
         })?;
 
         let content = Content::json(payload)?;
-        Ok(CallToolResult::success(vec![content]))
+        self.create_result_with_logging(content, start_time)
     }
 
     #[tool(
@@ -699,6 +726,7 @@ impl VcfServer {
         &self,
         Parameters(CloseSessionParams { session_id }): Parameters<CloseSessionParams>,
     ) -> Result<CallToolResult, McpError> {
+        let start_time = std::time::Instant::now();
         let mut sessions = self.query_sessions.lock().await;
         let existed = sessions.remove(&session_id).is_some();
 
@@ -708,7 +736,7 @@ impl VcfServer {
         });
 
         let content = Content::json(payload)?;
-        Ok(CallToolResult::success(vec![content]))
+        self.create_result_with_logging(content, start_time)
     }
 
     #[tool(
@@ -718,6 +746,7 @@ impl VcfServer {
         &self,
         Parameters(GetDocumentationParams { doc_type }): Parameters<GetDocumentationParams>,
     ) -> Result<CallToolResult, McpError> {
+        let start_time = std::time::Instant::now();
         let (content, doc_name) = match doc_type.to_lowercase().as_str() {
             "readme" | "main" => (README_DOCS, "README.md"),
             "streaming" => (STREAMING_DOCS, "STREAMING.md"),
@@ -745,7 +774,7 @@ impl VcfServer {
                     "sections": ["README.md", "STREAMING.md", "FILTER_EXAMPLES.md", "STREAMING_FILTER_EXAMPLES.md"]
                 });
                 let content = Content::json(payload)?;
-                return Ok(CallToolResult::success(vec![content]));
+                return self.create_result_with_logging(content, start_time);
             }
             unknown => {
                 return Err(McpError::invalid_params(
@@ -766,7 +795,7 @@ impl VcfServer {
         });
 
         let content = Content::json(payload)?;
-        Ok(CallToolResult::success(vec![content]))
+        self.create_result_with_logging(content, start_time)
     }
 
     // Helper method for chromosome not found responses
