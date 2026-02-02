@@ -909,26 +909,26 @@ fn build_id_index(
 
 // Load and index VCF file
 pub fn load_vcf(path: &PathBuf, debug: bool, save_index: bool) -> std::io::Result<VcfIndex> {
-    // Check for CSI index first (supports larger chromosomes), then TBI
+    // Check for existing indices: TBI first (for compatibility), then CSI
     let csi_path = PathBuf::from(format!("{}.csi", path.display()));
     let tbi_path = PathBuf::from(format!("{}.tbi", path.display()));
 
-    let genomic_index = if csi_path.exists() {
+    let genomic_index = if tbi_path.exists() {
+        // Use existing tabix index (prefer TBI if it exists for compatibility)
+        if debug {
+            eprintln!("Found tabix index: {}", tbi_path.display());
+        }
+        eprintln!("Loading VCF file with existing tabix index...");
+        GenomicIndex::Tabix(tabix::fs::read(&tbi_path)?)
+    } else if csi_path.exists() {
         // Use existing CSI index
         if debug {
             eprintln!("Found CSI index: {}", csi_path.display());
         }
         eprintln!("Loading VCF file with existing CSI index...");
         GenomicIndex::Csi(csi::fs::read(&csi_path)?)
-    } else if tbi_path.exists() {
-        // Use existing tabix index
-        if debug {
-            eprintln!("Found tabix index: {}", tbi_path.display());
-        }
-        eprintln!("Loading VCF file with existing tabix index...");
-        GenomicIndex::Tabix(tabix::fs::read(&tbi_path)?)
     } else {
-        // Build tabix index on the fly (default for VCF)
+        // Build tabix index on the fly (fallback - CSI requires external bcftools)
         eprintln!("No index found. Building tabix index...");
         let index = vcf::fs::index(path)?;
         eprintln!("Tabix index built successfully");
@@ -1136,8 +1136,7 @@ fn save_tabix_index_to_disk(
 }
 
 // Helper function to atomically save CSI index to disk
-// Currently unused but provided for future functionality (e.g., building CSI indices on-the-fly)
-#[allow(dead_code)]
+// Save CSI index to disk with atomic write
 fn save_csi_index_to_disk(
     index: &csi::Index,
     csi_path: &PathBuf,
