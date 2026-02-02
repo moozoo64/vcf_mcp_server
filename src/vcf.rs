@@ -107,6 +107,7 @@ pub struct VariantTypeStats {
 
 // VCF index structure - supports both tabix (.tbi) and CSI (.csi) indices for efficient queries
 pub struct VcfIndex {
+    #[allow(dead_code)]
     path: PathBuf,
     index: GenomicIndex,
     header: vcf::Header,
@@ -604,6 +605,8 @@ fn save_statistics_to_disk(
             .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))?;
         let mut tmp_file = fs::File::create(&tmp_path)?;
         tmp_file.write_all(&encoded)?;
+        tmp_file.flush()?;
+        tmp_file.sync_all()?; // Force OS to write to disk
     }
 
     // Check if .stats file was created by another process (race condition)
@@ -751,7 +754,7 @@ fn compute_statistics_from_vcf(
 
     // If header had no contigs, use chromosomes from actual variants
     if chromosomes.is_empty() {
-        chromosomes = variants_per_chromosome.keys().map(|k| k.clone()).collect();
+        chromosomes = variants_per_chromosome.keys().cloned().collect();
         chromosomes.sort(); // Sort for consistent ordering
     }
 
@@ -820,6 +823,8 @@ fn save_id_index_to_disk(
             .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))?;
         let mut tmp_file = fs::File::create(&tmp_path)?;
         tmp_file.write_all(&encoded)?;
+        tmp_file.flush()?;
+        tmp_file.sync_all()?; // Force OS to write to disk
     }
 
     // Check if .idx file was created by another process (race condition)

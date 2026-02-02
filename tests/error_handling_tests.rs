@@ -156,7 +156,7 @@ fn test_special_chromosome_names() {
     for name in special_names {
         let (variants, matched) = index.query_by_position(name, 100);
         // Should not panic, may or may not find results
-        assert!(variants.len() == 0 || matched.is_some());
+        assert!(variants.is_empty() || matched.is_some());
     }
 }
 
@@ -211,7 +211,7 @@ fn test_region_with_very_large_span() {
     let (variants, matched) = index.query_by_region("20", 1, 1_000_000_000);
     assert_eq!(matched, Some("20".to_string()));
     // Should find all variants on chromosome 20
-    assert!(variants.len() > 0);
+    assert!(!variants.is_empty());
 }
 
 // ============================================================================
@@ -254,8 +254,8 @@ fn test_variant_with_special_characters_in_id() {
 
     for id in special_ids {
         let results = index.query_by_id(id);
-        // Should complete without error
-        assert!(results.len() == 0 || results.len() > 0);
+        // Should complete without error (always true, but checks for panic)
+        assert!(results.is_empty() || !results.is_empty());
     }
 }
 
@@ -301,7 +301,7 @@ fn test_variant_info_field_access() {
     let (variants, _) = index.query_by_region("20", 14000, 18000);
 
     assert!(!variants.is_empty());
-    let filter_engine = index.filter_engine();
+    let _filter_engine = index.filter_engine();
 
     // Check that info fields are accessible
     for variant in &variants {

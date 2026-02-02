@@ -450,7 +450,7 @@ async fn test_streaming_large_region() {
     let (variants, matched_chr) = index.query_by_region("20", 1, 100_000_000);
     assert_eq!(matched_chr, Some("20".to_string()));
     assert!(
-        variants.len() > 0,
+        !variants.is_empty(),
         "Should find variants across entire chromosome"
     );
 
@@ -525,7 +525,10 @@ async fn test_filter_evaluation_with_streaming_data() {
     let (variants, _) = index.query_by_region("20", 14000, 18000);
     let filter_engine = index.filter_engine();
 
-    assert!(variants.len() >= 1, "Need at least one variant for testing");
+    assert!(
+        !variants.is_empty(),
+        "Need at least one variant for testing"
+    );
     let variant = &variants[0];
 
     // Test QUAL filter
@@ -598,7 +601,7 @@ async fn test_streaming_session_all_variants_filtered_out() {
 
     assert_eq!(matched_chr, Some("20".to_string()));
     assert!(
-        variants.len() > 0,
+        !variants.is_empty(),
         "Region should contain variants before filtering"
     );
 
@@ -939,7 +942,7 @@ fn test_vcf_statistics_computation() {
     // Variant count checks
     assert!(stats.total_variants > 0, "Should have at least one variant");
     assert!(
-        stats.variants_per_chromosome.len() > 0,
+        !stats.variants_per_chromosome.is_empty(),
         "Should have per-chromosome counts"
     );
 
