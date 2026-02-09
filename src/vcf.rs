@@ -602,17 +602,15 @@ fn parse_samples(
             .unwrap_or_else(|| format!("sample_{}", idx));
         let mut sample_data = HashMap::new();
 
-        for field_result in sample.iter(header) {
-            if let Ok((key, value_opt)) = field_result {
-                let json_value = match value_opt {
-                    Some(value) => {
-                        let debug_str = format!("{:?}", value);
-                        convert_sample_value(&debug_str)
-                    }
-                    None => serde_json::Value::Null,
-                };
-                sample_data.insert(key.to_string(), json_value);
-            }
+        for (key, value_opt) in sample.iter(header).flatten() {
+            let json_value = match value_opt {
+                Some(value) => {
+                    let debug_str = format!("{:?}", value);
+                    convert_sample_value(&debug_str)
+                }
+                None => serde_json::Value::Null,
+            };
+            sample_data.insert(key.to_string(), json_value);
         }
 
         if !sample_data.is_empty() {
