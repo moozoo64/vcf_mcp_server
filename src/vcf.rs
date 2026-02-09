@@ -38,6 +38,9 @@ pub struct Variant {
     pub quality: Option<f32>,
     pub filter: Vec<String>,
     pub info: HashMap<String, serde_json::Value>,
+    /// Per-sample genotype data: sample_name -> { field_name -> value }
+    /// e.g., {"NA00001": {"GT": "0|0", "GQ": 48, "DP": 1}}
+    pub samples: HashMap<String, HashMap<String, serde_json::Value>>,
     #[serde(skip_serializing)]
     pub raw_row: String,
 }
@@ -575,8 +578,122 @@ fn parse_variant_record(record: &vcf::Record, header: &vcf::Header) -> std::io::
             })
             .filter_map(|item| item.ok())
             .collect(),
+        samples: parse_samples(record, header),
         raw_row: raw_row_string,
     })
+}
+
+// Helper function to parse per-sample genotype data from a VCF record
+fn parse_samples(
+    record: &vcf::Record,
+    header: &vcf::Header,
+) -> HashMap<String, HashMap<String, serde_json::Value>> {
+    let mut result = HashMap::new();
+    let sample_names: Vec<String> = header
+        .sample_names()
+        .iter()
+        .map(|s| s.to_string())
+        .collect();
+
+    for (idx, sample) in record.samples().iter().enumerate() {
+        let sample_name = sample_names
+            .get(idx)
+            .cloned()
+            .unwrap_or_else(|| format!("sample_{}", idx));
+        let mut sample_data = HashMap::new();
+
+        for field_result in sample.iter(header) {
+            if let Ok((key, value_opt)) = field_result {
+                let json_value = match value_opt {
+                    Some(value) => {
+                        let debug_str = format!("{:?}", value);
+                        convert_sample_value(&debug_str)
+                    }
+                    None => serde_json::Value::Null,
+                };
+                sample_data.insert(key.to_string(), json_value);
+            }
+        }
+
+        if !sample_data.is_empty() {
+            result.insert(sample_name, sample_data);
+        }
+    }
+
+    result
+}
+
+// Helper function to convert debug-formatted sample values to JSON
+fn convert_sample_value(debug_str: &str) -> serde_json::Value {
+    let s = debug_str;
+
+    // Match Genotype pattern: Genotype(Genotype("0|0"))
+    if s.starts_with("Genotype(Genotype(\"") {
+        if let Some(inner) = s
+            .strip_prefix("Genotype(Genotype(\"")
+            .and_then(|s| s.strip_suffix("\"))"))
+        {
+            return serde_json::Value::String(inner.to_string());
+        }
+    }
+
+    // Match Integer(value)
+    if let Some(inner) = s.strip_prefix("Integer(").and_then(|s| s.strip_suffix(')')) {
+        if let Ok(num) = inner.parse::<i64>() {
+            return serde_json::Value::Number(num.into());
+        }
+    }
+
+    // Match Float(value)
+    if let Some(inner) = s.strip_prefix("Float(").and_then(|s| s.strip_suffix(')')) {
+        if let Ok(num) = inner.parse::<f64>() {
+            if let Some(json_num) = serde_json::Number::from_f64(num) {
+                return serde_json::Value::Number(json_num);
+            }
+        }
+    }
+
+    // Match String("value")
+    if let Some(inner) = s
+        .strip_prefix("String(\"")
+        .and_then(|s| s.strip_suffix("\")"))
+    {
+        return serde_json::Value::String(inner.to_string());
+    }
+
+    // Match Array([...]) - for HQ and similar fields with Ok(Some(value)) or Ok(None) pattern
+    if let Some(inner) = s.strip_prefix("Array([").and_then(|s| s.strip_suffix("])")) {
+        let values: Vec<serde_json::Value> = inner
+            .split("), ")
+            .map(|part| {
+                let part = part.trim().trim_end_matches(')');
+                // Handle Ok(Some(n)) pattern (raw integer)
+                if let Some(val_str) = part.strip_prefix("Ok(Some(") {
+                    // Try to parse as integer
+                    if let Ok(num) = val_str.parse::<i64>() {
+                        return serde_json::Value::Number(num.into());
+                    }
+                    // Try to parse as float
+                    if let Ok(num) = val_str.parse::<f64>() {
+                        if let Some(json_num) = serde_json::Number::from_f64(num) {
+                            return serde_json::Value::Number(json_num);
+                        }
+                    }
+                    // Return as string
+                    return serde_json::Value::String(val_str.to_string());
+                }
+                // Handle Ok(None) pattern
+                if part.contains("Ok(None") {
+                    return serde_json::Value::Null;
+                }
+                serde_json::Value::Null
+            })
+            .collect();
+        return serde_json::Value::Array(values);
+    }
+
+    // Fall back to string
+    serde_json::Value::String(s.to_string())
 }
 
 // Helper function to save ID index to disk

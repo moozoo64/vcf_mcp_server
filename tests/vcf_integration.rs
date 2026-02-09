@@ -1001,3 +1001,224 @@ fn test_vcf_statistics_computation() {
     eprintln!("  MNPs: {}", stats.variant_types.mnps);
     eprintln!("  Complex: {}", stats.variant_types.complex);
 }
+
+// ============================================================================
+// Query by Region Filter Tests
+// ============================================================================
+
+#[tokio::test]
+async fn test_query_by_region_filter_qual() {
+    let vcf_path = PathBuf::from("sample_data/sample.compressed.vcf.gz");
+    if !vcf_path.exists() {
+        eprintln!("Warning: Sample VCF file not found, skipping test");
+        return;
+    }
+
+    let index = load_vcf(&vcf_path, false, false).expect("Failed to load VCF file");
+    let filter_engine = index.filter_engine();
+
+    // Query without filter - should return 2 variants in this region
+    let (all_variants, _) = index.query_by_region("20", 14370, 17330);
+    assert_eq!(
+        all_variants.len(),
+        2,
+        "Should have 2 variants without filter"
+    );
+
+    // Apply QUAL > 10 filter - should return only 1 variant (quality 29.0)
+    let filter = "QUAL > 10";
+    let filtered_variants: Vec<_> = all_variants
+        .iter()
+        .filter(|v| filter_engine.evaluate(filter, &v.raw_row).unwrap_or(false))
+        .collect();
+
+    assert_eq!(
+        filtered_variants.len(),
+        1,
+        "QUAL > 10 should return 1 variant"
+    );
+    assert!(
+        filtered_variants[0].quality.unwrap_or(0.0) > 10.0,
+        "Filtered variant should have quality > 10"
+    );
+}
+
+#[tokio::test]
+async fn test_query_by_region_filter_pass() {
+    let vcf_path = PathBuf::from("sample_data/sample.compressed.vcf.gz");
+    if !vcf_path.exists() {
+        eprintln!("Warning: Sample VCF file not found, skipping test");
+        return;
+    }
+
+    let index = load_vcf(&vcf_path, false, false).expect("Failed to load VCF file");
+    let filter_engine = index.filter_engine();
+
+    // Query region with 2 variants - one PASS, one q10
+    let (all_variants, _) = index.query_by_region("20", 14370, 17330);
+    assert_eq!(
+        all_variants.len(),
+        2,
+        "Should have 2 variants without filter"
+    );
+
+    // Apply FILTER == "PASS" filter
+    let filter = "FILTER == \"PASS\"";
+    let filtered_variants: Vec<_> = all_variants
+        .iter()
+        .filter(|v| filter_engine.evaluate(filter, &v.raw_row).unwrap_or(false))
+        .collect();
+
+    assert_eq!(
+        filtered_variants.len(),
+        1,
+        "FILTER == PASS should return 1 variant"
+    );
+    assert!(
+        filtered_variants[0].filter.contains(&"PASS".to_string()),
+        "Filtered variant should have PASS filter"
+    );
+}
+
+#[tokio::test]
+async fn test_query_by_region_filter_info_field() {
+    let vcf_path = PathBuf::from("sample_data/sample.compressed.vcf.gz");
+    if !vcf_path.exists() {
+        eprintln!("Warning: Sample VCF file not found, skipping test");
+        return;
+    }
+
+    let index = load_vcf(&vcf_path, false, false).expect("Failed to load VCF file");
+    let filter_engine = index.filter_engine();
+
+    // Query region
+    let (all_variants, _) = index.query_by_region("20", 14370, 17330);
+    assert_eq!(
+        all_variants.len(),
+        2,
+        "Should have 2 variants without filter"
+    );
+
+    // Filter by INFO field DP > 12
+    let filter = "DP > 12";
+    let filtered_variants: Vec<_> = all_variants
+        .iter()
+        .filter(|v| filter_engine.evaluate(filter, &v.raw_row).unwrap_or(false))
+        .collect();
+
+    assert_eq!(
+        filtered_variants.len(),
+        1,
+        "DP > 12 should return 1 variant"
+    );
+    // The variant with DP=14 should be returned
+    let dp_val = filtered_variants[0].info.get("DP");
+    assert!(
+        dp_val.is_some(),
+        "Filtered variant should have DP info field"
+    );
+}
+
+#[tokio::test]
+async fn test_query_by_region_filter_combined() {
+    let vcf_path = PathBuf::from("sample_data/sample.compressed.vcf.gz");
+    if !vcf_path.exists() {
+        eprintln!("Warning: Sample VCF file not found, skipping test");
+        return;
+    }
+
+    let index = load_vcf(&vcf_path, false, false).expect("Failed to load VCF file");
+    let filter_engine = index.filter_engine();
+
+    // Query region
+    let (all_variants, _) = index.query_by_region("20", 14370, 17330);
+
+    // Combined filter: QUAL > 10 AND FILTER == "PASS"
+    let filter = "QUAL > 10 && FILTER == \"PASS\"";
+    let filtered_variants: Vec<_> = all_variants
+        .iter()
+        .filter(|v| filter_engine.evaluate(filter, &v.raw_row).unwrap_or(false))
+        .collect();
+
+    assert_eq!(
+        filtered_variants.len(),
+        1,
+        "Combined filter should return 1 variant"
+    );
+    assert!(filtered_variants[0].quality.unwrap_or(0.0) > 10.0);
+    assert!(filtered_variants[0].filter.contains(&"PASS".to_string()));
+}
+
+#[tokio::test]
+async fn test_query_by_region_filter_no_match() {
+    let vcf_path = PathBuf::from("sample_data/sample.compressed.vcf.gz");
+    if !vcf_path.exists() {
+        eprintln!("Warning: Sample VCF file not found, skipping test");
+        return;
+    }
+
+    let index = load_vcf(&vcf_path, false, false).expect("Failed to load VCF file");
+    let filter_engine = index.filter_engine();
+
+    // Query region
+    let (all_variants, _) = index.query_by_region("20", 14370, 17330);
+    assert!(
+        !all_variants.is_empty(),
+        "Should have variants before filtering"
+    );
+
+    // Filter that matches nothing
+    let filter = "QUAL > 999999";
+    let filtered_variants: Vec<_> = all_variants
+        .iter()
+        .filter(|v| filter_engine.evaluate(filter, &v.raw_row).unwrap_or(false))
+        .collect();
+
+    assert_eq!(
+        filtered_variants.len(),
+        0,
+        "Impossible filter should return no variants"
+    );
+}
+
+#[tokio::test]
+async fn test_query_by_region_filter_empty() {
+    let vcf_path = PathBuf::from("sample_data/sample.compressed.vcf.gz");
+    if !vcf_path.exists() {
+        eprintln!("Warning: Sample VCF file not found, skipping test");
+        return;
+    }
+
+    let index = load_vcf(&vcf_path, false, false).expect("Failed to load VCF file");
+
+    // Query without filter - should return all variants
+    let (all_variants, _) = index.query_by_region("20", 14370, 17330);
+    assert_eq!(
+        all_variants.len(),
+        2,
+        "No filter should return all 2 variants"
+    );
+
+    // Empty filter string should also return all variants (handled at app level)
+    let filter_engine = index.filter_engine();
+    let filter = "";
+
+    // With empty filter, the app should not filter at all
+    // This tests the logic pattern used in query_by_region
+    let filtered_variants: Vec<_> = all_variants
+        .iter()
+        .filter(|v| {
+            if filter.trim().is_empty() {
+                true
+            } else {
+                filter_engine.evaluate(filter, &v.raw_row).unwrap_or(false)
+            }
+        })
+        .collect();
+
+    assert_eq!(
+        filtered_variants.len(),
+        2,
+        "Empty filter should return all variants"
+    );
+}

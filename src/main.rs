@@ -59,6 +59,9 @@ struct QueryByRegionParams {
     start: u64,
     /// End position (1-based, inclusive)
     end: u64,
+    /// Optional filter expression (e.g., "QUAL > 30", "FILTER == PASS"). Empty or omitted means no filtering.
+    #[serde(default)]
+    filter: Option<String>,
 }
 
 #[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
@@ -304,7 +307,7 @@ impl VcfServer {
     }
 
     #[tool(
-        description = "Query variants in a genomic region. Maximum region size is 10,000 bp (10 kb). Requests exceeding this limit will be rejected. NOTE: Coordinates are genome build-specific (GRCh37 vs GRCh38). Check the reference_genome field in the response to verify which build is being queried."
+        description = "Query variants in a genomic region. Maximum region size is 10,000 bp (10 kb). Requests exceeding this limit will be rejected. Optionally filter variants using a filter expression (e.g., 'QUAL > 30', 'FILTER == PASS'). NOTE: Coordinates are genome build-specific (GRCh37 vs GRCh38). Check the reference_genome field in the response to verify which build is being queried."
     )]
     async fn query_by_region(
         &self,
@@ -312,6 +315,7 @@ impl VcfServer {
             chromosome: requested_chromosome,
             start,
             end,
+            filter,
         }): Parameters<QueryByRegionParams>,
     ) -> Result<CallToolResult, McpError> {
         let start_time = std::time::Instant::now();
@@ -329,6 +333,20 @@ impl VcfServer {
             ));
         }
 
+        // Validate filter expression if provided
+        let filter_str = filter.unwrap_or_default();
+        if !filter_str.trim().is_empty() {
+            let index = self.index.lock().await;
+            let filter_engine = index.filter_engine();
+            drop(index);
+            if let Err(e) = filter_engine.parse_filter(&filter_str) {
+                return Err(McpError::invalid_params(
+                    format!("Invalid filter expression: {}", e),
+                    None,
+                ));
+            }
+        }
+
         let query_context = RegionQuery {
             chromosome: requested_chromosome.clone(),
             start,
@@ -338,9 +356,28 @@ impl VcfServer {
         let response = {
             let index = self.index.lock().await;
             let (variants, matched_chr) = index.query_by_region(&requested_chromosome, start, end);
-            let count = variants.len();
-            let items: Vec<Variant> = variants.into_iter().map(format_variant).collect();
-            let result = QueryResult { count, items };
+            let filter_engine = index.filter_engine();
+
+            // Apply filter if provided
+            let filtered_variants: Vec<Variant> = variants
+                .into_iter()
+                .map(format_variant)
+                .filter(|v| {
+                    if filter_str.trim().is_empty() {
+                        true
+                    } else {
+                        filter_engine
+                            .evaluate(&filter_str, &v.raw_row)
+                            .unwrap_or(false)
+                    }
+                })
+                .collect();
+
+            let count = filtered_variants.len();
+            let result = QueryResult {
+                count,
+                items: filtered_variants,
+            };
 
             let (status, available_sample, alternate_suggestion) =
                 build_chromosome_response(&index, &requested_chromosome, &matched_chr);
@@ -536,8 +573,13 @@ impl VcfServer {
         let filter_engine = index.filter_engine();
 
         let first_variant = region_variants.into_iter().map(format_variant).find(|v| {
-            // Use vcf-filter to evaluate filter expression
-            filter_engine.evaluate(&filter, &v.raw_row).unwrap_or(false)
+            // If no filter specified, accept all variants
+            if filter.trim().is_empty() {
+                true
+            } else {
+                // Use vcf-filter to evaluate filter expression
+                filter_engine.evaluate(&filter, &v.raw_row).unwrap_or(false)
+            }
         });
 
         // If no variants found, return graceful response (consistent with get_next_variant)
@@ -644,7 +686,11 @@ impl VcfServer {
 
         // Find next variant that passes filter
         let next_variant = variants.into_iter().map(format_variant).find(|v| {
-            filter_engine.evaluate(&filter, &v.raw_row).unwrap_or(false) // Treat filter errors as non-match
+            if filter.trim().is_empty() {
+                true
+            } else {
+                filter_engine.evaluate(&filter, &v.raw_row).unwrap_or(false)
+            }
         });
 
         if next_variant.is_none() {
@@ -682,7 +728,11 @@ impl VcfServer {
         // Check if there are more variants after this one that pass the filter
         let (peek_variants, _) = index.query_by_region(&chromosome, new_position + 1, end);
         let has_more = peek_variants.into_iter().map(format_variant).any(|v| {
-            filter_engine.evaluate(&filter, &v.raw_row).unwrap_or(false) // Treat filter errors as non-match
+            if filter.trim().is_empty() {
+                true
+            } else {
+                filter_engine.evaluate(&filter, &v.raw_row).unwrap_or(false)
+            }
         });
 
         let reference_genome = index.get_reference_genome();
