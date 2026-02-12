@@ -14,6 +14,7 @@ use std::sync::Arc;
 use tokio::sync::Mutex;
 use uuid::Uuid;
 use vcf::{format_variant, load_vcf, Variant, VcfIndex};
+use vcf_filter::docs as filter_docs;
 
 // Embed documentation at compile time
 const README_DOCS: &str = include_str!("../README.md");
@@ -115,7 +116,7 @@ struct CloseSessionParams {
 
 #[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
 struct GetDocumentationParams {
-    /// Which documentation to retrieve: "readme", "streaming", "filters", "streaming-filters", or "all"
+    /// Which documentation to retrieve: "readme", "streaming", "filters", "streaming-filters", "filterlib", or "all"
     #[serde(default = "default_doc_type")]
     doc_type: String,
 }
@@ -790,7 +791,7 @@ impl VcfServer {
     }
 
     #[tool(
-        description = "Get embedded documentation for the VCF MCP server. Available types: 'readme' (main documentation), 'streaming' (streaming query guide), 'filters' (filter syntax examples), 'streaming-filters' (streaming with filters guide), 'all' (complete documentation)."
+        description = "Get embedded documentation for the VCF MCP server. Available types: 'readme' (main documentation), 'streaming' (streaming query guide), 'filters' (filter syntax examples), 'streaming-filters' (streaming with filters guide), 'filterlib' (vcf-filter library syntax and operators), 'all' (complete documentation)."
     )]
     async fn get_documentation(
         &self,
@@ -803,6 +804,17 @@ impl VcfServer {
             "filters" | "filter" => (FILTER_DOCS, "FILTER_EXAMPLES.md"),
             "streaming-filters" | "streaming_filters" => {
                 (STREAMING_FILTER_DOCS, "STREAMING_FILTER_EXAMPLES.md")
+            }
+            "filterlib" | "filter_lib" | "filter-lib" => {
+                let documentation = filter_docs();
+                let payload = serde_json::json!({
+                    "doc_type": "filterlib",
+                    "document_name": "vcf-filter library",
+                    "content": documentation,
+                    "format": "markdown"
+                });
+                let content = Content::json(payload)?;
+                return self.create_result_with_logging(content, start_time);
             }
             "all" => {
                 let combined = format!(
@@ -829,7 +841,7 @@ impl VcfServer {
             unknown => {
                 return Err(McpError::invalid_params(
                     format!(
-                        "Unknown doc_type '{}'. Available: readme, streaming, filters, streaming-filters, all",
+                        "Unknown doc_type '{}'. Available: readme, streaming, filters, streaming-filters, filterlib, all",
                         unknown
                     ),
                     None,

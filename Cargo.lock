@@ -1746,7 +1746,7 @@ dependencies = [
 [[package]]
 name = "vcf-filter"
 version = "0.1.0"
-source = "git+https://github.com/moozoo64/vcf-filter#c44fc5f3a3fd37edcfbfc4689efdad9ac5486088"
+source = "git+https://github.com/moozoo64/vcf-filter#f16decd6b2d2728f81575ba55e5811891a3070ff"
 dependencies = [
  "chumsky",
  "thiserror",

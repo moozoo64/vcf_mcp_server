@@ -225,7 +225,7 @@ Get statistics with top 10 chromosomes only:
 Get embedded documentation for this MCP server.
 
 **Parameters:**
-- `doc_type` (string): Type of documentation - "readme", "streaming", "filters", "streaming-filters", or "all"
+- `doc_type` (string): Type of documentation - "readme", "streaming", "filters", "streaming-filters", "filterlib", or "all"
 
 **Example:**
 ```json
