@@ -246,7 +246,20 @@ impl VcfIndex {
                         *position,
                     ),
                 };
-                results.extend(variants);
+                results.extend(
+                    variants
+                        .into_iter()
+                        .filter(|variant| {
+                            if variant.id == id {
+                                true
+                            } else if variant.id == "." {
+                                false
+                            } else {
+                                variant.id.split(';').any(|entry| entry == id)
+                            }
+                        })
+                        .collect::<Vec<_>>(),
+                );
             }
 
             results
@@ -530,6 +543,13 @@ fn parse_variant_record(record: &vcf::Record, header: &vcf::Header) -> std::io::
         .trim_end()
         .to_string();
 
+    let ids: Vec<String> = record
+        .ids()
+        .iter()
+        .map(|id| id.to_string())
+        .filter(|id| id != ".")
+        .collect();
+
     Ok(Variant {
         chromosome: record.reference_sequence_name().to_string(),
         position: usize::from(
@@ -541,7 +561,11 @@ fn parse_variant_record(record: &vcf::Record, header: &vcf::Header) -> std::io::
                     std::io::Error::new(std::io::ErrorKind::InvalidData, "Missing position")
                 })?,
         ) as u64,
-        id: record.ids().iter().next().unwrap_or(".").to_string(),
+        id: if ids.is_empty() {
+            ".".to_string()
+        } else {
+            ids.join(";")
+        },
         reference: record.reference_bases().to_string(),
         alternate: record
             .alternate_bases()
@@ -998,10 +1022,14 @@ fn build_id_index(
     let mut count = 0;
     for record in reader.records().flatten() {
         if let Ok(variant) = parse_variant_record(&record, header) {
-            // Skip "." (missing ID)
-            if variant.id != "." {
+            // Index all IDs from the record (semicolon-delimited in variant.id)
+            for id in variant
+                .id
+                .split(';')
+                .filter(|id| !id.is_empty() && *id != ".")
+            {
                 id_index
-                    .entry(variant.id.clone())
+                    .entry(id.to_string())
                     .or_default()
                     .push((variant.chromosome.clone(), variant.position));
             }
@@ -1024,24 +1052,24 @@ fn build_id_index(
 
 // Load and index VCF file
 pub fn load_vcf(path: &PathBuf, debug: bool, save_index: bool) -> std::io::Result<VcfIndex> {
-    // Check for existing indices: TBI first (for compatibility), then CSI
+    // Check for existing indices: CSI first (supports larger contigs), then TBI
     let csi_path = PathBuf::from(format!("{}.csi", path.display()));
     let tbi_path = PathBuf::from(format!("{}.tbi", path.display()));
 
-    let genomic_index = if tbi_path.exists() {
-        // Use existing tabix index (prefer TBI if it exists for compatibility)
-        if debug {
-            eprintln!("Found tabix index: {}", tbi_path.display());
-        }
-        eprintln!("Loading VCF file with existing tabix index...");
-        GenomicIndex::Tabix(tabix::fs::read(&tbi_path)?)
-    } else if csi_path.exists() {
+    let genomic_index = if csi_path.exists() {
         // Use existing CSI index
         if debug {
             eprintln!("Found CSI index: {}", csi_path.display());
         }
         eprintln!("Loading VCF file with existing CSI index...");
         GenomicIndex::Csi(csi::fs::read(&csi_path)?)
+    } else if tbi_path.exists() {
+        // Use existing tabix index
+        if debug {
+            eprintln!("Found tabix index: {}", tbi_path.display());
+        }
+        eprintln!("Loading VCF file with existing tabix index...");
+        GenomicIndex::Tabix(tabix::fs::read(&tbi_path)?)
     } else {
         // Build tabix index on the fly (fallback - CSI requires external bcftools)
         eprintln!("No index found. Building tabix index...");

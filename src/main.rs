@@ -209,7 +209,7 @@ struct QuerySession {
     end: u64,
     // Last position returned (to resume from next position)
     last_position: Option<u64>,
-    created_at: std::time::Instant,
+    last_accessed_at: std::time::Instant,
     // Filter expression to apply to variants
     filter: String,
 }
@@ -322,13 +322,20 @@ impl VcfServer {
         let start_time = std::time::Instant::now();
         const MAX_WINDOW: u64 = 10000; // 10 kb maximum region size
 
+        if start > end {
+            return Err(McpError::invalid_params(
+                format!("Invalid region: start ({}) must be <= end ({})", start, end),
+                None,
+            ));
+        }
+
         // Validate region size
-        if end > start && (end - start) > MAX_WINDOW {
+        let window_size = end.saturating_sub(start).saturating_add(1);
+        if window_size > MAX_WINDOW {
             return Err(McpError::invalid_params(
                 format!(
                     "Requested region too large ({} bp). Maximum window is {} bp.",
-                    end - start,
-                    MAX_WINDOW
+                    window_size, MAX_WINDOW
                 ),
                 None,
             ));
@@ -530,6 +537,14 @@ impl VcfServer {
         }): Parameters<StreamRegionParams>,
     ) -> Result<CallToolResult, McpError> {
         let start_time = std::time::Instant::now();
+
+        if start > end {
+            return Err(McpError::invalid_params(
+                format!("Invalid region: start ({}) must be <= end ({})", start, end),
+                None,
+            ));
+        }
+
         // Validate filter expression before processing
         let index = self.index.lock().await;
 
@@ -548,29 +563,34 @@ impl VcfServer {
 
         let index = self.index.lock().await;
 
-        // Find matching chromosome (handles chr1 vs 1 normalization)
-        let matched_chr = index.get_available_chromosomes().into_iter().find(|chr| {
-            chr.to_lowercase() == requested_chromosome.to_lowercase()
-                || chr.to_lowercase() == format!("chr{}", requested_chromosome).to_lowercase()
-                || chr.to_lowercase()
-                    == requested_chromosome
-                        .strip_prefix("chr")
-                        .unwrap_or(&requested_chromosome)
-                        .to_lowercase()
-        });
-
-        let matched_chr_name = matched_chr.ok_or_else(|| {
-            McpError::internal_error(
+        // Query the region and resolve matching chromosome (handles chr1 vs 1 normalization)
+        let (region_variants, matched_chr) =
+            index.query_by_region(&requested_chromosome, start, end);
+        let matched_chr_name = if let Some(chr) = matched_chr {
+            chr
+        } else {
+            let available_sample: Vec<String> = index
+                .get_available_chromosomes()
+                .into_iter()
+                .take(5)
+                .collect();
+            let alternate = if requested_chromosome.starts_with("chr") {
+                requested_chromosome
+                    .strip_prefix("chr")
+                    .unwrap_or(&requested_chromosome)
+                    .to_string()
+            } else {
+                format!("chr{}", requested_chromosome)
+            };
+            return Err(McpError::invalid_params(
                 format!(
-                    "Chromosome '{}' not found in VCF file",
-                    requested_chromosome
+                    "Chromosome '{}' not found in VCF file. Try '{}'. Available chromosomes (first 5): {:?}",
+                    requested_chromosome, alternate, available_sample
                 ),
                 None,
-            )
-        })?;
+            ));
+        };
 
-        // Query the region and find first variant that passes filter
-        let (region_variants, _) = index.query_by_region(&matched_chr_name, start, end);
         let filter_engine = index.filter_engine();
 
         let first_variant = region_variants.into_iter().map(format_variant).find(|v| {
@@ -606,30 +626,45 @@ impl VcfServer {
         }
 
         let first_variant = first_variant.unwrap();
+        let first_position = first_variant.position;
+
+        // Determine whether there are more matching variants after the first result
+        let (peek_variants, _) = index.query_by_region(&matched_chr_name, first_position + 1, end);
+        let has_more = peek_variants.into_iter().map(format_variant).any(|v| {
+            if filter.trim().is_empty() {
+                true
+            } else {
+                filter_engine.evaluate(&filter, &v.raw_row).unwrap_or(false)
+            }
+        });
+
+        let reference_genome = index.get_reference_genome();
 
         // Create session
-        let session_id = Uuid::new_v4().to_string();
-        let session = QuerySession {
-            chromosome: matched_chr_name.clone(),
-            start,
-            end,
-            last_position: Some(first_variant.position),
-            created_at: std::time::Instant::now(),
-            filter: filter.clone(),
+        let session_id = if has_more {
+            let id = Uuid::new_v4().to_string();
+            let now = std::time::Instant::now();
+            let session = QuerySession {
+                chromosome: matched_chr_name.clone(),
+                start,
+                end,
+                last_position: Some(first_position),
+                last_accessed_at: now,
+                filter: filter.clone(),
+            };
+
+            drop(index); // Release lock before acquiring sessions lock
+            let mut sessions = self.query_sessions.lock().await;
+            sessions.insert(id.clone(), session);
+            Some(id)
+        } else {
+            None
         };
-
-        drop(index); // Release lock before acquiring sessions lock
-        let mut sessions = self.query_sessions.lock().await;
-        sessions.insert(session_id.clone(), session);
-        drop(sessions);
-
-        let index = self.index.lock().await;
-        let reference_genome = index.get_reference_genome();
 
         let response = StreamQueryResponse {
             variant: Some(first_variant),
-            session_id: Some(session_id),
-            has_more: true, // Assume yes until we check
+            session_id,
+            has_more,
             reference_genome,
             matched_chromosome: Some(matched_chr_name),
         };
@@ -653,30 +688,34 @@ impl VcfServer {
         Parameters(NextVariantParams { session_id }): Parameters<NextVariantParams>,
     ) -> Result<CallToolResult, McpError> {
         let start_time = std::time::Instant::now();
-        let mut sessions = self.query_sessions.lock().await;
+        let (chromosome, last_pos, end, filter) = {
+            let mut sessions = self.query_sessions.lock().await;
 
-        let session = sessions.get(&session_id).ok_or_else(|| {
-            McpError::internal_error(
-                "Session not found or expired. Start a new query with start_region_query.",
-                None,
+            let session = sessions.get_mut(&session_id).ok_or_else(|| {
+                McpError::internal_error(
+                    "Session not found or expired. Start a new query with start_region_query.",
+                    None,
+                )
+            })?;
+
+            // Check session inactivity timeout (5 minutes)
+            if session.last_accessed_at.elapsed().as_secs() > 300 {
+                sessions.remove(&session_id);
+                return Err(McpError::internal_error(
+                    "Session expired. Start a new query.",
+                    None,
+                ));
+            }
+
+            session.last_accessed_at = std::time::Instant::now();
+
+            (
+                session.chromosome.clone(),
+                session.last_position.unwrap_or(session.start),
+                session.end,
+                session.filter.clone(),
             )
-        })?;
-
-        // Check session timeout (5 minutes)
-        if session.created_at.elapsed().as_secs() > 300 {
-            sessions.remove(&session_id);
-            return Err(McpError::internal_error(
-                "Session expired. Start a new query.",
-                None,
-            ));
-        }
-
-        // Get session details before releasing lock
-        let chromosome = session.chromosome.clone();
-        let last_pos = session.last_position.unwrap_or(session.start);
-        let end = session.end;
-        let filter = session.filter.clone();
-        drop(sessions);
+        };
 
         let index = self.index.lock().await;
 
@@ -696,12 +735,11 @@ impl VcfServer {
 
         if next_variant.is_none() {
             // No more variants - close session
+            let reference_genome = index.get_reference_genome();
             drop(index);
+
             let mut sessions = self.query_sessions.lock().await;
             sessions.remove(&session_id);
-
-            let index = self.index.lock().await;
-            let reference_genome = index.get_reference_genome();
 
             let response = StreamQueryResponse {
                 variant: None,
