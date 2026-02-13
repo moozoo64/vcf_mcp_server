@@ -5,6 +5,13 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.2.1] - 2026
+
+### Changed
+- Documentation synchronized with current MCP API behavior and response schemas
+- Streaming examples updated to reflect one-variant-per-call semantics (`variant`, `session_id`, `has_more`)
+- Test scripts and testing docs aligned with current timeout-safe non-hanging workflow
+
 ## [0.2.0-fork] - 2024
 
 **Note**: This version represents enhancements made in this fork by Michael Simmons, built on top of Jade Auer's v0.1.0 release.
@@ -19,11 +26,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Statistics Tool** (`get_statistics`): Comprehensive VCF file statistics including:
   - Variant counts by type (SNPs, insertions, deletions, MNPs, complex)
   - Quality score statistics (min, max, mean)
-  - Read depth statistics
   - Filter status distribution
   - Chromosome-specific variant counts
 - **Documentation Tool** (`get_documentation`): Access embedded documentation
-  - Five documentation types: readme, streaming, filters, streaming-filters, all
+  - Six documentation types: readme, streaming, filters, streaming-filters, filterlib, all
   - Documentation embedded at compile time (~50KB added to binary)
 - **MCP Resource**: `vcf://metadata` resource for accessing VCF header metadata
   - File format version, reference genome, contigs, samples
@@ -129,4 +135,5 @@ Key changes:
 - Access embedded docs via `get_documentation` tool
 
 [0.2.0-fork]: https://github.com/jda/vcf_mcp_server/compare/v0.1.0...develop
+[0.2.1]: https://github.com/jda/vcf_mcp_server/compare/v0.2.0-fork...develop
 [0.1.0]: https://github.com/jda/vcf_mcp_server/releases/tag/v0.1.0

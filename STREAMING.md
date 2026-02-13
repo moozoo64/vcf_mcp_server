@@ -26,7 +26,7 @@ Streaming queries solve this by maintaining server-side session state and return
   "chromosome": "20",
   "start": 60000,
   "end": 70000,
-  "filter": "QUAL > 30 AND FILTER == PASS"  // Optional filter
+  "filter": "QUAL > 30 && FILTER == \"PASS\""  // Optional filter
 }
 
 // Response:
@@ -99,7 +99,7 @@ Start a new streaming query session for a genomic region.
 - `chromosome` (string): Chromosome name (e.g., "1", "chr1", "X")
 - `start` (u64): Start position (1-based, inclusive)
 - `end` (u64): End position (1-based, inclusive)
-- `filter` (string, optional): Filter expression (e.g., "QUAL > 30 AND FILTER == PASS"). Empty/omitted = no filtering. See [FILTER_EXAMPLES.md](FILTER_EXAMPLES.md) for syntax.
+- `filter` (string, optional): Filter expression (e.g., "QUAL > 30 && FILTER == \"PASS\""). Empty/omitted = no filtering. See [FILTER_EXAMPLES.md](FILTER_EXAMPLES.md) for syntax.
 
 **Returns:**
 - `variant`: First variant in region matching filter (or null if none found)
@@ -109,7 +109,7 @@ Start a new streaming query session for a genomic region.
 - `matched_chromosome`: Actual chromosome name used
 
 **Errors:**
-- Chromosome not found → suggests alternate names (chr1 ↔ 1)
+- Chromosome not found → returns an error
 - No variants match filter → descriptive error message
 
 ### `get_next_variant`
@@ -216,11 +216,11 @@ const result = await start_region_query({
   start: 1000,
   end: 2000
 });
-// Error: "Chromosome 'chr1' not found. Try '1'?"
+// Error: "Chromosome 'chr1' not found in VCF file"
 
-// Retry with suggestion
+// Retry with alternate naming convention
 const retry = await start_region_query({
-  chromosome: "1",  // Use suggested name
+  chromosome: "1",
   start: 1000,
   end: 2000
 });
@@ -316,7 +316,7 @@ Sessions stored in `Arc<Mutex<HashMap<String, QuerySession>>>`:
 
 ### Error Handling
 
-- **Chromosome not found**: Returns suggestions (chr1 ↔ 1)
+- **Chromosome not found**: Retry with alternate naming convention (`chr1` ↔ `1`)
 - **Session not found**: Prompt to start new query
 - **Session expired**: Auto-remove after 5 minutes
 - **No variants**: Returns `variant: null` immediately

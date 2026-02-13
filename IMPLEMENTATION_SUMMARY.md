@@ -16,6 +16,7 @@ Added **stateful streaming query support** to the VCF MCP Server, allowing LLMs 
   - `chromosome`, `start`, `end`: Query parameters
   - `last_position`: Last variant position returned
   - `created_at`: For timeout enforcement
+  - `filter`: Filter expression for session-scoped filtering
   
 - `StreamRegionParams`: Parameters for starting a streaming query
 - `NextVariantParams`: Parameters for getting next variant
@@ -44,7 +45,7 @@ Added **stateful streaming query support** to the VCF MCP Server, allowing LLMs 
    - Frees server resources
 
 #### Helper Methods
-- `build_chromosome_not_found_response()`: Consistent error handling for chromosome mismatches
+- Shared result/logging and chromosome-response helpers for consistent MCP responses
 
 ### 3. Documentation
 - **STREAMING.md**: Comprehensive guide with:
@@ -54,7 +55,7 @@ Added **stateful streaming query support** to the VCF MCP Server, allowing LLMs 
   - Session management details
   - Comparison with batch queries
 
-- **tests/test_streaming.sh**: Basic test script (requires MCP client for full testing)
+- **tests/test_streaming.sh**: Automated streaming test script with timeout-safe MCP stdio flow
 
 ## Key Features
 

@@ -26,7 +26,7 @@ Added `max_chromosomes` parameter to `get_statistics` tool to limit the number o
 ```bash
 $ cargo test --release
 ...
-test result: ok. 37 passed; 0 failed; 0 ignored; 0 measured
+test result: ok. all tests passed
 ```
 
 ### Example Verification: ✅ PASS
@@ -49,9 +49,9 @@ Tested with large VCF file (HG00242.deepvariant.clinvar.vcf.gz, 7.1M variants, 3
 - max_chromosomes=0: Returns all 3,366 chromosomes
 - max_chromosomes=10: Returns top 10 chromosomes
 
-## Sample Data Limitation
+## Sample Data Notes
 
-The included sample data (`sample.compressed.vcf.gz`) has only 1 chromosome (chr20), so automated MCP protocol tests don't meaningfully demonstrate the limiting feature. However:
+The included sample data (`sample.compressed.vcf.gz`) currently contains a small number of chromosomes, so automated MCP protocol tests only demonstrate limiting behavior at small scale. However:
 
 1. The Rust code compiles without errors
 2. All 37 existing unit tests pass

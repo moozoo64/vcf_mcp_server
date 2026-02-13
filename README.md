@@ -6,7 +6,7 @@
 
 _Original disclaimer: No warranty express or implied. This was totally vibe-coded while chronicly sleep-deprived and watching Bluey and Tremors 5._ Use at your own risk. AFAICT it works and outputs line up with what I get through traditional tools.
 
-**Current Version**: 0.2.0-fork | [Changelog](CHANGELOG.md)
+**Current Version**: 0.2.1 | [Changelog](CHANGELOG.md)
 
 ---
 
@@ -187,7 +187,6 @@ Get comprehensive statistics about the VCF file including variant counts, qualit
 - Total variant count
 - SNP/insertion/deletion/MNP/complex variant counts
 - Quality score statistics (min, max, mean)
-- Depth statistics
 - Filter status distribution
 - Chromosome-specific variant counts (limited to top N chromosomes)
 
@@ -227,6 +226,8 @@ Get embedded documentation for this MCP server.
 **Parameters:**
 - `doc_type` (string): Type of documentation - "readme", "streaming", "filters", "streaming-filters", "filterlib", or "all"
 
+**Note:** `doc_type: "filterlib"` returns the full documentation exposed by the upstream `vcf-filter` library through this server.
+
 **Example:**
 ```json
 {
@@ -240,6 +241,17 @@ Get embedded documentation for this MCP server.
 ## Filter Support
 
 The server supports advanced variant filtering using the [vcf-filter](https://github.com/moozoo64/vcf-filter) library. Filters can be applied to `query_by_region` and `start_region_query` tools.
+
+For the canonical filter grammar/reference from the library itself, call:
+
+```json
+{
+  "name": "get_documentation",
+  "arguments": {
+    "doc_type": "filterlib"
+  }
+}
+```
 
 **Example filters:**
 - `QUAL > 30` - Quality score greater than 30

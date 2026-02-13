@@ -2,6 +2,21 @@
 
 **⚠️ Breaking Change in v0.2.0**: The filter system has been upgraded to use the [vcf-filter](https://github.com/moozoo64/vcf-filter) library, which provides a more powerful expression language with INFO field access, annotation queries, and proper operator precedence.
 
+## Canonical Reference
+
+This file is a practical guide. The **authoritative filter syntax and semantics** come directly from the upstream `vcf-filter` library docs exposed at runtime by this server:
+
+```json
+{
+	"name": "get_documentation",
+	"arguments": {
+		"doc_type": "filterlib"
+	}
+}
+```
+
+`doc_type: "filterlib"` returns the full `vcf-filter` documentation content provided by `vcf_filter::docs()`.
+
 ## Filter Syntax
 
 Filters use a SQL-like expression language to query variants based on VCF fields.

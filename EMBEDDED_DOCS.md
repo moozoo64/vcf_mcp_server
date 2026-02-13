@@ -1,6 +1,8 @@
 # Embedded Documentation Tool
 
-The VCF MCP Server now includes a `get_documentation` tool that provides access to all documentation embedded in the binary.
+The VCF MCP Server includes a `get_documentation` tool that provides access to project documentation embedded in the binary, plus `filterlib` documentation exposed by the upstream `vcf-filter` library.
+
+For `doc_type: "filterlib"`, content is returned directly from `vcf_filter::docs()` at runtime.
 
 ## Available Documentation
 
@@ -50,7 +52,7 @@ const result = await get_documentation({
 });
 
 console.log(result.content); // FILTER_EXAMPLES.md content
-// Learn filter syntax: QUAL > 30, FILTER == PASS, etc.
+// Learn filter syntax: QUAL > 30, FILTER == "PASS", etc.
 ```
 
 ### Get Streaming + Filters Guide

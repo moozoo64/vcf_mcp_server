@@ -85,7 +85,7 @@ cargo bench
 5. Lock index: `let index = self.index.lock().await;`
 6. Query data, serialize to JSON via `Content::json()`, return `CallToolResult::success(vec![content])`
 
-**Example**: See `query_by_position` in [src/main.rs](src/main.rs#L143-L193)
+**Example**: See `query_by_position` in [src/main.rs](src/main.rs#L262-L307)
 
 ## Project-Specific Conventions
 
