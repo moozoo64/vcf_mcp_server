@@ -1,31 +1,55 @@
 #!/bin/bash
 # Test statistics chromosome limiting
 
+set -euo pipefail
+
+extract_json_rpc() {
+python3 -c 'import json,sys
+text=sys.stdin.read()
+decoder=json.JSONDecoder()
+i=0
+while i < len(text):
+  while i < len(text) and text[i] not in "[{":
+    i += 1
+  if i >= len(text):
+    break
+  try:
+    obj,end = decoder.raw_decode(text, i)
+    if isinstance(obj, dict) and obj.get("jsonrpc") == "2.0":
+      print(json.dumps(obj))
+    i = end
+  except Exception:
+    i += 1'
+}
+
 VCF_FILE="sample_data/sample.compressed.vcf.gz"
 SERVER="./target/release/vcf_mcp_server"
 
 echo "Testing statistics with default limit (25 chromosomes)..."
-(
-  echo '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2024-11-05","capabilities":{},"clientInfo":{"name":"test","version":"1.0.0"}}}'
-  echo '{"jsonrpc":"2.0","method":"notifications/initialized"}'
-  echo '{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"get_statistics","arguments":{}}}'
-  sleep 1
-) | $SERVER "$VCF_FILE" 2>&1 | grep -o '"id":2' -A 5000 | jq -s '.[0].result.content[0].text | fromjson | .variants_per_chromosome | length' 2>/dev/null || echo "Parse error"
+run_stats_count() {
+  local request_id="$1"
+  local args_json="$2"
+
+  local output
+  output=$(timeout 10 "$SERVER" "$VCF_FILE" 2>/dev/null <<EOF || true
+{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2024-11-05","capabilities":{},"clientInfo":{"name":"test","version":"1.0.0"}}}
+{"jsonrpc":"2.0","method":"notifications/initialized","params":{}}
+{"jsonrpc":"2.0","id":$request_id,"method":"tools/call","params":{"name":"get_statistics","arguments":$args_json}}
+EOF
+)
+
+    local json_lines
+      json_lines=$(echo "$output" | extract_json_rpc || true)
+
+  echo "$json_lines" | jq -r --argjson id "$request_id" 'select(.id == $id) | .result.content[0].text | fromjson | .variants_per_chromosome | length' 2>/dev/null || echo "Parse error"
+}
+
+run_stats_count 2 '{}'
 
 echo ""
 echo "Testing statistics with max_chromosomes=10..."
-(
-  echo '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2024-11-05","capabilities":{},"clientInfo":{"name":"test","version":"1.0.0"}}}'
-  echo '{"jsonrpc":"2.0","method":"notifications/initialized"}'
-  echo '{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"get_statistics","arguments":{"max_chromosomes":10}}}'
-  sleep 1
-) | $SERVER "$VCF_FILE" 2>&1 | grep -o '"id":3' -A 5000 | jq -s '.[0].result.content[0].text | fromjson | .variants_per_chromosome | length' 2>/dev/null || echo "Parse error"
+run_stats_count 3 '{"max_chromosomes":10}'
 
 echo ""
 echo "Testing statistics with max_chromosomes=0 (all)..."
-(
-  echo '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2024-11-05","capabilities":{},"clientInfo":{"name":"test","version":"1.0.0"}}}'
-  echo '{"jsonrpc":"2.0","method":"notifications/initialized"}'
-  echo '{"jsonrpc":"2.0","id":4,"method":"tools/call","params":{"name":"get_statistics","arguments":{"max_chromosomes":0}}}'
-  sleep 1
-) | $SERVER "$VCF_FILE" 2>&1 | grep -o '"id":4' -A 5000 | jq -s '.[0].result.content[0].text | fromjson | .variants_per_chromosome | length' 2>/dev/null || echo "Parse error"
+run_stats_count 4 '{"max_chromosomes":0}'
