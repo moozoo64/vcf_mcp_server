@@ -1744,8 +1744,8 @@ dependencies = [
 
 [[package]]
 name = "vcf-filter"
-version = "0.1.0"
-source = "git+https://github.com/moozoo64/vcf-filter#f16decd6b2d2728f81575ba55e5811891a3070ff"
+version = "0.1.2"
+source = "git+https://github.com/moozoo64/vcf-filter#bf4fde1bfaa421274b608d5795f0a868638e9b30"
 dependencies = [
  "chumsky",
  "thiserror",
@@ -1753,7 +1753,7 @@ dependencies = [
 
 [[package]]
 name = "vcf_mcp_server"
-version = "0.2.1"
+version = "0.2.2"
 dependencies = [
  "anyhow",
  "axum",

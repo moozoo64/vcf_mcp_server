@@ -5,6 +5,13 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.2.2] - 2026
+
+### Changed
+- Upgraded crate metadata to Rust edition 2024
+- Bumped crate version to 0.2.2
+- Updated `vcf-filter` to latest Git revision (includes DP filter behavior fix observed in tests)
+
 ## [0.2.1] - 2026
 
 ### Changed
@@ -135,5 +142,6 @@ Key changes:
 - Access embedded docs via `get_documentation` tool
 
 [0.2.0-fork]: https://github.com/jda/vcf_mcp_server/compare/v0.1.0...develop
+[0.2.2]: https://github.com/jda/vcf_mcp_server/compare/v0.2.1...develop
 [0.2.1]: https://github.com/jda/vcf_mcp_server/compare/v0.2.0-fork...develop
 [0.1.0]: https://github.com/jda/vcf_mcp_server/releases/tag/v0.1.0
