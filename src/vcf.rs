@@ -543,6 +543,9 @@ fn parse_variant_record(record: &vcf::Record, header: &vcf::Header) -> std::io::
         .trim_end()
         .to_string();
 
+    let samples = parse_samples(record, header);
+    let normalized_raw_row = normalize_raw_row_samples(&raw_row_string, header, &samples);
+
     let ids: Vec<String> = record
         .ids()
         .iter()
@@ -602,9 +605,78 @@ fn parse_variant_record(record: &vcf::Record, header: &vcf::Header) -> std::io::
             })
             .filter_map(|item| item.ok())
             .collect(),
-        samples: parse_samples(record, header),
-        raw_row: raw_row_string,
+        samples,
+        raw_row: normalized_raw_row,
     })
+}
+
+fn normalize_raw_row_samples(
+    raw_row: &str,
+    header: &vcf::Header,
+    samples: &HashMap<String, HashMap<String, serde_json::Value>>,
+) -> String {
+    let mut fields: Vec<String> = raw_row.split('\t').map(|s| s.to_string()).collect();
+    if fields.len() < 10 {
+        return raw_row.to_string();
+    }
+
+    let format_keys: Vec<String> = fields[8].split(':').map(|s| s.to_string()).collect();
+    if format_keys.is_empty() {
+        return raw_row.to_string();
+    }
+
+    let sample_names: Vec<String> = header
+        .sample_names()
+        .iter()
+        .map(|name| name.to_string())
+        .collect();
+
+    for (sample_idx, sample_name) in sample_names.iter().enumerate() {
+        let col_idx = 9 + sample_idx;
+        if col_idx >= fields.len() {
+            break;
+        }
+
+        let Some(sample_values) = samples.get(sample_name) else {
+            continue;
+        };
+
+        let rebuilt = format_keys
+            .iter()
+            .map(|key| {
+                sample_values
+                    .get(key)
+                    .map(format_sample_value)
+                    .unwrap_or_else(|| ".".to_string())
+            })
+            .collect::<Vec<_>>()
+            .join(":");
+
+        fields[col_idx] = rebuilt;
+    }
+
+    fields.join("\t")
+}
+
+fn format_sample_value(value: &serde_json::Value) -> String {
+    match value {
+        serde_json::Value::Null => ".".to_string(),
+        serde_json::Value::Bool(flag) => {
+            if *flag {
+                "1".to_string()
+            } else {
+                "0".to_string()
+            }
+        }
+        serde_json::Value::Number(n) => n.to_string(),
+        serde_json::Value::String(s) => s.clone(),
+        serde_json::Value::Array(items) => items
+            .iter()
+            .map(format_sample_value)
+            .collect::<Vec<_>>()
+            .join(","),
+        serde_json::Value::Object(_) => value.to_string(),
+    }
 }
 
 // Helper function to parse per-sample genotype data from a VCF record

@@ -2,18 +2,19 @@ mod vcf;
 
 use clap::Parser;
 use rmcp::{
+    ErrorData as McpError, RoleServer, ServerHandler, ServiceExt,
     handler::server::{router::tool::ToolRouter, tool::ToolCallContext, wrapper::Parameters},
     model::*,
     schemars,
     service::RequestContext,
-    tool, tool_router, ErrorData as McpError, RoleServer, ServerHandler, ServiceExt,
+    tool, tool_router,
 };
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::Arc;
 use tokio::sync::Mutex;
 use uuid::Uuid;
-use vcf::{format_variant, load_vcf, Variant, VcfIndex};
+use vcf::{Variant, VcfIndex, format_variant, load_vcf};
 use vcf_filter::docs as filter_docs;
 
 // Embed documentation at compile time
@@ -256,6 +257,39 @@ impl VcfServer {
         Ok(CallToolResult::success(vec![content]))
     }
 
+    fn debug_log_filter_expression(&self, context: &str, filter_expression: &str) {
+        if self.debug {
+            eprintln!(
+                "[DEBUG] Filter expression ({}) sent to filter engine: {:?}",
+                context, filter_expression
+            );
+        }
+    }
+
+    fn debug_log_filter_evaluation(
+        &self,
+        context: &str,
+        filter_expression: &str,
+        variant: &Variant,
+        passes: bool,
+        eval_error: Option<&str>,
+    ) {
+        if !self.debug {
+            return;
+        }
+
+        eprintln!(
+            "[DEBUG] Filter evaluate ({}) | variant={}:{} id={} | passes={} | error={} | filter={:?}",
+            context,
+            variant.chromosome,
+            variant.position,
+            variant.id,
+            passes,
+            eval_error.unwrap_or(""),
+            filter_expression
+        );
+    }
+
     #[tool(
         description = "Query variants at a specific genomic position. NOTE: Coordinates are genome build-specific (GRCh37 vs GRCh38). Check the reference_genome field in the response to verify which build is being queried."
     )]
@@ -344,6 +378,7 @@ impl VcfServer {
         // Validate filter expression if provided
         let filter_str = filter.unwrap_or_default();
         if !filter_str.trim().is_empty() {
+            self.debug_log_filter_expression("query_by_region", &filter_str);
             let index = self.index.lock().await;
             let filter_engine = index.filter_engine();
             drop(index);
@@ -374,9 +409,19 @@ impl VcfServer {
                     if filter_str.trim().is_empty() {
                         true
                     } else {
-                        filter_engine
-                            .evaluate(&filter_str, &v.raw_row)
-                            .unwrap_or(false)
+                        let evaluation = filter_engine.evaluate(&filter_str, &v.raw_row);
+                        let (passes, eval_error) = match evaluation {
+                            Ok(p) => (p, None),
+                            Err(e) => (false, Some(e.to_string())),
+                        };
+                        self.debug_log_filter_evaluation(
+                            "query_by_region",
+                            &filter_str,
+                            v,
+                            passes,
+                            eval_error.as_deref(),
+                        );
+                        passes
                     }
                 })
                 .collect();
@@ -549,6 +594,7 @@ impl VcfServer {
         let index = self.index.lock().await;
 
         if !filter.trim().is_empty() {
+            self.debug_log_filter_expression("start_region_query", &filter);
             let filter_engine = index.filter_engine();
             drop(index); // Drop lock before potentially expensive operation
             if let Err(e) = filter_engine.parse_filter(&filter) {
@@ -599,7 +645,19 @@ impl VcfServer {
                 true
             } else {
                 // Use vcf-filter to evaluate filter expression
-                filter_engine.evaluate(&filter, &v.raw_row).unwrap_or(false)
+                let evaluation = filter_engine.evaluate(&filter, &v.raw_row);
+                let (passes, eval_error) = match evaluation {
+                    Ok(p) => (p, None),
+                    Err(e) => (false, Some(e.to_string())),
+                };
+                self.debug_log_filter_evaluation(
+                    "start_region_query:first_variant",
+                    &filter,
+                    v,
+                    passes,
+                    eval_error.as_deref(),
+                );
+                passes
             }
         });
 
@@ -634,7 +692,19 @@ impl VcfServer {
             if filter.trim().is_empty() {
                 true
             } else {
-                filter_engine.evaluate(&filter, &v.raw_row).unwrap_or(false)
+                let evaluation = filter_engine.evaluate(&filter, &v.raw_row);
+                let (passes, eval_error) = match evaluation {
+                    Ok(p) => (p, None),
+                    Err(e) => (false, Some(e.to_string())),
+                };
+                self.debug_log_filter_evaluation(
+                    "start_region_query:has_more",
+                    &filter,
+                    &v,
+                    passes,
+                    eval_error.as_deref(),
+                );
+                passes
             }
         });
 
@@ -724,12 +794,28 @@ impl VcfServer {
         let (variants, _) = index.query_by_region(&chromosome, next_pos, end);
         let filter_engine = index.filter_engine();
 
+        if !filter.trim().is_empty() {
+            self.debug_log_filter_expression("get_next_variant", &filter);
+        }
+
         // Find next variant that passes filter
         let next_variant = variants.into_iter().map(format_variant).find(|v| {
             if filter.trim().is_empty() {
                 true
             } else {
-                filter_engine.evaluate(&filter, &v.raw_row).unwrap_or(false)
+                let evaluation = filter_engine.evaluate(&filter, &v.raw_row);
+                let (passes, eval_error) = match evaluation {
+                    Ok(p) => (p, None),
+                    Err(e) => (false, Some(e.to_string())),
+                };
+                self.debug_log_filter_evaluation(
+                    "get_next_variant:next_variant",
+                    &filter,
+                    v,
+                    passes,
+                    eval_error.as_deref(),
+                );
+                passes
             }
         });
 
@@ -770,7 +856,19 @@ impl VcfServer {
             if filter.trim().is_empty() {
                 true
             } else {
-                filter_engine.evaluate(&filter, &v.raw_row).unwrap_or(false)
+                let evaluation = filter_engine.evaluate(&filter, &v.raw_row);
+                let (passes, eval_error) = match evaluation {
+                    Ok(p) => (p, None),
+                    Err(e) => (false, Some(e.to_string())),
+                };
+                self.debug_log_filter_evaluation(
+                    "get_next_variant:has_more",
+                    &filter,
+                    &v,
+                    passes,
+                    eval_error.as_deref(),
+                );
+                passes
             }
         });
 
@@ -1134,13 +1232,13 @@ async fn main() -> std::io::Result<()> {
 
 async fn run_sse_server(server: VcfServer, addr: &str) -> std::io::Result<()> {
     use axum::{
+        Router,
         extract::Request,
         middleware::{self, Next},
         response::Response,
-        Router,
     };
     use rmcp::transport::streamable_http_server::{
-        session::local::LocalSessionManager, StreamableHttpServerConfig, StreamableHttpService,
+        StreamableHttpServerConfig, StreamableHttpService, session::local::LocalSessionManager,
     };
 
     let bind_addr: std::net::SocketAddr = addr
@@ -1189,6 +1287,8 @@ async fn run_sse_server(server: VcfServer, addr: &str) -> std::io::Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::fs;
+    use vcf_filter::FilterEngine;
 
     fn create_test_index() -> VcfIndex {
         let vcf_path = PathBuf::from("sample_data/sample.compressed.vcf.gz");
@@ -1281,5 +1381,77 @@ mod tests {
         // Count header lines (all lines starting with #)
         let line_count = header_string.lines().filter(|l| l.starts_with('#')).count();
         assert!(line_count > 0, "Header should have at least one line");
+    }
+
+    #[test]
+    fn test_raw_row_filter_evaluation_matches_malformed_gt_input() {
+        let mut sample_fields = HashMap::new();
+        sample_fields.insert(
+            "GT".to_string(),
+            serde_json::Value::String("1/1".to_string()),
+        );
+
+        let mut samples = HashMap::new();
+        samples.insert("SAMPLE".to_string(), sample_fields);
+
+        let variant = Variant {
+            chromosome: "chr1".to_string(),
+            position: 977780,
+            id: "rs2710875".to_string(),
+            reference: "C".to_string(),
+            alternate: vec!["T".to_string()],
+            quality: None,
+            filter: vec![],
+            info: HashMap::new(),
+            samples,
+            raw_row: "chr1\t977780\trs2710875\tC\tT\t.\t.\t.\tGT\t/1/1".to_string(),
+        };
+
+        assert_eq!(
+            variant.raw_row,
+            "chr1\t977780\trs2710875\tC\tT\t.\t.\t.\tGT\t/1/1"
+        );
+    }
+
+    #[test]
+    fn test_filter_engine_with_rs2710875_one_row_vcf() {
+        let content = fs::read_to_string("sample_data/rs2710875test.vcf")
+            .expect("Failed to read rs2710875test.vcf");
+
+        let mut header_lines = Vec::new();
+        let mut data_row: Option<String> = None;
+
+        for line in content.lines() {
+            if line.starts_with('#') {
+                header_lines.push(line);
+            } else if !line.trim().is_empty() {
+                data_row = Some(line.to_string());
+                break;
+            }
+        }
+
+        let header = format!("{}\n", header_lines.join("\n"));
+        let row = data_row.expect("Expected exactly one data row in rs2710875test.vcf");
+
+        let filter_engine =
+            FilterEngine::new(&header).expect("Failed to create filter engine from test header");
+
+        assert!(
+            filter_engine
+                .evaluate("ID == \"rs2710875\"", &row)
+                .expect("ID filter should evaluate")
+        );
+
+        assert!(
+            filter_engine
+                .evaluate("GT == \"1/1\"", &row)
+                .expect("GT filter should evaluate")
+        );
+
+        assert!(
+            filter_engine
+                .evaluate("ID == \"rs2710875\" && GT == \"1/1\"", &row)
+                .expect("Combined ID/GT filter should evaluate")
+        );
     }
 }
