@@ -31,14 +31,16 @@ Streaming queries solve this by maintaining server-side session state and return
 
 // Response:
 {
-  "variant": {
-    "chromosome": "20",
-    "position": 60001,
-    "id": "rs123",
-    "ref": "A",
-    "alt": ["G"],
-    // ... full variant data
-  },
+  "variants": [
+    {
+      "chromosome": "20",
+      "position": 60001,
+      "id": "rs123",
+      "ref": "A",
+      "alt": ["G"]
+      // ... up to 5 variants
+    }
+  ],
   "session_id": "550e8400-e29b-41d4-a716-446655440000",
   "has_more": true,
   "reference_genome": "GRCh38",
@@ -58,12 +60,15 @@ Streaming queries solve this by maintaining server-side session state and return
 
 // Response:
 {
-  "variant": {
-    "chromosome": "20",
-    "position": 60150,
-    "id": "rs456",
-    // ...
-  },
+  "variants": [
+    {
+      "chromosome": "20",
+      "position": 60150,
+      "id": "rs456"
+      // ...
+    }
+    // ... up to 5 variants
+  ],
   "session_id": "550e8400-e29b-41d4-a716-446655440000",
   "has_more": true,
   "reference_genome": "GRCh38",
@@ -81,7 +86,7 @@ Streaming queries solve this by maintaining server-side session state and return
 
 // Response:
 {
-  "variant": null,
+  "variants": [],
   "session_id": null,
   "has_more": false,
   "reference_genome": "GRCh38",
@@ -102,8 +107,8 @@ Start a new streaming query session for a genomic region.
 - `filter` (string, optional): Filter expression (e.g., "QUAL > 30 && FILTER == \"PASS\""). Empty/omitted = no filtering. See [FILTER_EXAMPLES.md](FILTER_EXAMPLES.md) for syntax.
 
 **Returns:**
-- `variant`: First variant in region matching filter (or null if none found)
-- `session_id`: UUID for subsequent calls (or null if no variants)
+- `variants`: Array of up to 5 variants matching filter (empty array if none found)
+- `session_id`: UUID for subsequent calls (or null if no more variants)
 - `has_more`: Whether more variants exist
 - `reference_genome`: Genome build (GRCh37/GRCh38/etc.)
 - `matched_chromosome`: Actual chromosome name used
@@ -120,7 +125,7 @@ Get the next variant from an active session.
 - `session_id` (string): Session ID from `start_region_query` or previous `get_next_variant`
 
 **Returns:**
-- `variant`: Next variant (or null if exhausted)
+- `variants`: Array of up to 5 variants (empty array if exhausted)
 - `session_id`: Same ID (or null if exhausted)
 - `has_more`: Whether more variants exist
 - `reference_genome`: Genome build
@@ -158,20 +163,20 @@ const init = await start_region_query({
   end: 2000000
 });
 
-// Process first variant
-if (init.variant) {
-  processVariant(init.variant);
+// Process first batch (up to 5 variants)
+for (const v of init.variants) {
+  processVariant(v);
 }
 
-// Get remaining variants one by one
+// Get remaining batches
 let session_id = init.session_id;
 while (session_id) {
   const next = await get_next_variant({ session_id });
-  
-  if (next.variant) {
-    processVariant(next.variant);
+
+  for (const v of next.variants) {
+    processVariant(v);
   }
-  
+
   // Update session_id (becomes null when done)
   session_id = next.session_id;
 }
@@ -190,11 +195,12 @@ const pathogenic = [];
 let current = session;
 
 while (current.session_id && pathogenic.length < 5) {
-  if (current.variant && isPathogenic(current.variant)) {
-    pathogenic.push(current.variant);
+  for (const v of current.variants) {
+    if (isPathogenic(v)) pathogenic.push(v);
+    if (pathogenic.length >= 5) break;
   }
-  
-  if (current.has_more) {
+
+  if (current.has_more && pathogenic.length < 5) {
     current = await get_next_variant({ session_id: current.session_id });
   } else {
     break;
@@ -308,7 +314,7 @@ Sessions stored in `Arc<Mutex<HashMap<String, QuerySession>>>`:
 - **Chromosome not found**: Retry with alternate naming convention (`chr1` ↔ `1`)
 - **Session not found**: Prompt to start new query
 - **Session expired**: Auto-remove after 5 minutes
-- **No variants**: Returns `variant: null` immediately
+- **No variants**: Returns `variants: []` immediately
 
 ## Limitations
 

@@ -162,8 +162,8 @@ struct QueryByIdResponse {
 
 #[derive(Debug, serde::Serialize)]
 struct StreamQueryResponse {
-    /// Next variant in region, or null if exhausted
-    variant: Option<Variant>,
+    /// Variants in this batch (up to 5), or empty if exhausted
+    variants: Vec<Variant>,
     /// Session ID for subsequent calls, or null if query complete
     session_id: Option<String>,
     /// Whether more variants exist in this region
@@ -420,7 +420,7 @@ impl VcfServer {
     }
 
     #[tool(
-        description = "Start a new streaming query session for a genomic region. Returns the first variant and a session_id for subsequent calls. Use get_next_variant to retrieve remaining variants one at a time. Optionally filter variants using a filter expression (e.g., 'QUAL > 30 AND FILTER == PASS')."
+        description = "Start a new streaming query session for a genomic region. Returns up to 5 variants per call. If has_more is true, use get_next_variant with the returned session_id to retrieve subsequent batches. Optionally filter variants using a filter expression (e.g., 'QUAL > 30 AND FILTER == PASS')."
     )]
     async fn start_region_query(
         &self,
@@ -432,6 +432,7 @@ impl VcfServer {
         }): Parameters<StreamRegionParams>,
     ) -> Result<CallToolResult, McpError> {
         let start_time = std::time::Instant::now();
+        const BATCH_SIZE: usize = 5;
 
         if start > end {
             return Err(McpError::invalid_params(
@@ -489,33 +490,42 @@ impl VcfServer {
 
         let filter_engine = index.filter_engine();
 
-        let first_variant = region_variants.into_iter().map(format_variant).find(|v| {
-            // If no filter specified, accept all variants
-            if filter.trim().is_empty() {
-                true
-            } else {
-                // Use vcf-filter to evaluate filter expression
-                let evaluation = filter_engine.evaluate(&filter, &v.raw_row);
-                let (passes, eval_error) = match evaluation {
-                    Ok(p) => (p, None),
-                    Err(e) => (false, Some(e.to_string())),
-                };
-                self.debug_log_filter_evaluation(
-                    "start_region_query:first_variant",
-                    &filter,
-                    v,
-                    passes,
-                    eval_error.as_deref(),
-                );
-                passes
-            }
-        });
+        // Collect up to BATCH_SIZE+1 filtered variants; the extra one tells us if has_more is true
+        let mut batch: Vec<Variant> = region_variants
+            .into_iter()
+            .map(format_variant)
+            .filter(|v| {
+                if filter.trim().is_empty() {
+                    true
+                } else {
+                    let evaluation = filter_engine.evaluate(&filter, &v.raw_row);
+                    let (passes, eval_error) = match evaluation {
+                        Ok(p) => (p, None),
+                        Err(e) => (false, Some(e.to_string())),
+                    };
+                    self.debug_log_filter_evaluation(
+                        "start_region_query",
+                        &filter,
+                        v,
+                        passes,
+                        eval_error.as_deref(),
+                    );
+                    passes
+                }
+            })
+            .take(BATCH_SIZE + 1)
+            .collect();
 
-        // If no variants found, return graceful response (consistent with get_next_variant)
-        if first_variant.is_none() {
-            let reference_genome = index.get_reference_genome();
+        let has_more = batch.len() > BATCH_SIZE;
+        if has_more {
+            batch.truncate(BATCH_SIZE);
+        }
+
+        let reference_genome = index.get_reference_genome();
+
+        if batch.is_empty() {
             let response = StreamQueryResponse {
-                variant: None,
+                variants: vec![],
                 session_id: None,
                 has_more: false,
                 reference_genome,
@@ -533,43 +543,17 @@ impl VcfServer {
             return self.create_result_with_logging(content, start_time);
         }
 
-        let first_variant = first_variant.unwrap();
-        let first_position = first_variant.position;
+        let last_position = batch.last().unwrap().position;
 
-        // Determine whether there are more matching variants after the first result
-        let (peek_variants, _) = index.query_by_region(&matched_chr_name, first_position + 1, end);
-        let has_more = peek_variants.into_iter().map(format_variant).any(|v| {
-            if filter.trim().is_empty() {
-                true
-            } else {
-                let evaluation = filter_engine.evaluate(&filter, &v.raw_row);
-                let (passes, eval_error) = match evaluation {
-                    Ok(p) => (p, None),
-                    Err(e) => (false, Some(e.to_string())),
-                };
-                self.debug_log_filter_evaluation(
-                    "start_region_query:has_more",
-                    &filter,
-                    &v,
-                    passes,
-                    eval_error.as_deref(),
-                );
-                passes
-            }
-        });
-
-        let reference_genome = index.get_reference_genome();
-
-        // Create session
+        // Create session only when there are more variants beyond this batch
         let session_id = if has_more {
             let id = Uuid::new_v4().to_string();
-            let now = std::time::Instant::now();
             let session = QuerySession {
                 chromosome: matched_chr_name.clone(),
                 start,
                 end,
-                last_position: Some(first_position),
-                last_accessed_at: now,
+                last_position: Some(last_position),
+                last_accessed_at: std::time::Instant::now(),
                 filter: filter.clone(),
             };
 
@@ -582,7 +566,7 @@ impl VcfServer {
         };
 
         let response = StreamQueryResponse {
-            variant: Some(first_variant),
+            variants: batch,
             session_id,
             has_more,
             reference_genome,
@@ -601,13 +585,15 @@ impl VcfServer {
     }
 
     #[tool(
-        description = "Get the next variant from an active streaming query session. Returns one variant at a time. When has_more is false, the session is complete and automatically closed."
+        description = "Get the next batch of variants (up to 5) from an active streaming query session. When has_more is false, the session is complete and automatically closed."
     )]
     async fn get_next_variant(
         &self,
         Parameters(NextVariantParams { session_id }): Parameters<NextVariantParams>,
     ) -> Result<CallToolResult, McpError> {
         let start_time = std::time::Instant::now();
+        const BATCH_SIZE: usize = 5;
+
         let (chromosome, last_pos, end, filter) = {
             let mut sessions = self.query_sessions.lock().await;
 
@@ -639,7 +625,7 @@ impl VcfServer {
 
         let index = self.index.lock().await;
 
-        // Query from next position after last returned variant
+        // Query from next position after last returned batch
         let next_pos = last_pos + 1;
         let (variants, _) = index.query_by_region(&chromosome, next_pos, end);
         let filter_engine = index.filter_engine();
@@ -648,28 +634,38 @@ impl VcfServer {
             self.debug_log_filter_expression("get_next_variant", &filter);
         }
 
-        // Find next variant that passes filter
-        let next_variant = variants.into_iter().map(format_variant).find(|v| {
-            if filter.trim().is_empty() {
-                true
-            } else {
-                let evaluation = filter_engine.evaluate(&filter, &v.raw_row);
-                let (passes, eval_error) = match evaluation {
-                    Ok(p) => (p, None),
-                    Err(e) => (false, Some(e.to_string())),
-                };
-                self.debug_log_filter_evaluation(
-                    "get_next_variant:next_variant",
-                    &filter,
-                    v,
-                    passes,
-                    eval_error.as_deref(),
-                );
-                passes
-            }
-        });
+        // Collect up to BATCH_SIZE+1 filtered variants; the extra one tells us if has_more is true
+        let mut batch: Vec<Variant> = variants
+            .into_iter()
+            .map(format_variant)
+            .filter(|v| {
+                if filter.trim().is_empty() {
+                    true
+                } else {
+                    let evaluation = filter_engine.evaluate(&filter, &v.raw_row);
+                    let (passes, eval_error) = match evaluation {
+                        Ok(p) => (p, None),
+                        Err(e) => (false, Some(e.to_string())),
+                    };
+                    self.debug_log_filter_evaluation(
+                        "get_next_variant",
+                        &filter,
+                        v,
+                        passes,
+                        eval_error.as_deref(),
+                    );
+                    passes
+                }
+            })
+            .take(BATCH_SIZE + 1)
+            .collect();
 
-        if next_variant.is_none() {
+        let has_more = batch.len() > BATCH_SIZE;
+        if has_more {
+            batch.truncate(BATCH_SIZE);
+        }
+
+        if batch.is_empty() {
             // No more variants - close session
             let reference_genome = index.get_reference_genome();
             drop(index);
@@ -678,7 +674,7 @@ impl VcfServer {
             sessions.remove(&session_id);
 
             let response = StreamQueryResponse {
-                variant: None,
+                variants: vec![],
                 session_id: None,
                 has_more: false,
                 reference_genome,
@@ -696,49 +692,23 @@ impl VcfServer {
             return self.create_result_with_logging(content, start_time);
         }
 
-        // Get next variant
-        let next_variant_data = next_variant.unwrap();
-        let new_position = next_variant_data.position;
-
-        // Check if there are more variants after this one that pass the filter
-        let (peek_variants, _) = index.query_by_region(&chromosome, new_position + 1, end);
-        let has_more = peek_variants.into_iter().map(format_variant).any(|v| {
-            if filter.trim().is_empty() {
-                true
-            } else {
-                let evaluation = filter_engine.evaluate(&filter, &v.raw_row);
-                let (passes, eval_error) = match evaluation {
-                    Ok(p) => (p, None),
-                    Err(e) => (false, Some(e.to_string())),
-                };
-                self.debug_log_filter_evaluation(
-                    "get_next_variant:has_more",
-                    &filter,
-                    &v,
-                    passes,
-                    eval_error.as_deref(),
-                );
-                passes
-            }
-        });
-
+        let last_position = batch.last().unwrap().position;
         let reference_genome = index.get_reference_genome();
         drop(index);
 
-        // Update session with new position
+        // Update session with last position in this batch
         let mut sessions = self.query_sessions.lock().await;
         if let Some(session) = sessions.get_mut(&session_id) {
-            session.last_position = Some(new_position);
+            session.last_position = Some(last_position);
         }
 
-        // If no more variants, remove session
         if !has_more {
             sessions.remove(&session_id);
         }
         drop(sessions);
 
         let response = StreamQueryResponse {
-            variant: Some(next_variant_data),
+            variants: batch,
             session_id: if has_more { Some(session_id) } else { None },
             has_more,
             reference_genome,

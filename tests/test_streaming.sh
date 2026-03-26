@@ -49,11 +49,11 @@ if [ -z "$stream_response" ]; then
     exit 1
 fi
 
-session_id=$(echo "$stream_response" | jq -r '.result.content[0].text | fromjson | .session_id' 2>/dev/null || echo "")
-if [ -n "$session_id" ] && [ "$session_id" != "null" ]; then
-    echo "✓ start_region_query created session: $session_id"
+variant_count=$(echo "$stream_response" | jq -r '.result.content[0].text | fromjson | .variants | length' 2>/dev/null || echo "0")
+if [ "$variant_count" -gt "0" ]; then
+    echo "✓ start_region_query returned $variant_count variant(s)"
 else
-    echo "ERROR: start_region_query did not return a valid session_id"
+    echo "ERROR: start_region_query did not return any variants"
     exit 1
 fi
 

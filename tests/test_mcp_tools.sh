@@ -140,11 +140,11 @@ fi
 stream_response=$(echo "$json_lines" | jq -c 'select(.id == 7)' || true)
 if [ ! -z "$stream_response" ]; then
     echo -e "\n${BLUE}Test: start_region_query${NC}"
-    session_id=$(echo "$stream_response" | jq -r '.result.content[0].text | fromjson | .session_id' 2>/dev/null || echo "")
-    if [ ! -z "$session_id" ] && [ "$session_id" != "null" ]; then
-        echo -e "${GREEN}✓ Streaming session created${NC}"
+    variant_count=$(echo "$stream_response" | jq -r '.result.content[0].text | fromjson | .variants | length' 2>/dev/null || echo "0")
+    if [ "$variant_count" -gt "0" ]; then
+        echo -e "${GREEN}✓ Streaming returned $variant_count variant(s)${NC}"
     else
-        echo -e "${RED}✗ Failed to create streaming session${NC}"
+        echo -e "${RED}✗ start_region_query returned no variants${NC}"
         failures=$((failures + 1))
     fi
 fi

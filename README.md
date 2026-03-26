@@ -89,7 +89,7 @@ Start a streaming query session for a genomic region. Returns one variant at a t
 - `end` (integer): End position (1-based, inclusive)
 - `filter` (string, optional): Filter expression to select variants (see [FILTER_EXAMPLES.md](FILTER_EXAMPLES.md))
 
-**Returns:** First variant + session_id for subsequent calls
+**Returns:** Array of up to 5 variants + session_id for subsequent calls
 
 ### 4. `get_next_variant` (Streaming)
 Get the next variant from an active streaming session.
@@ -97,7 +97,7 @@ Get the next variant from an active streaming session.
 **Parameters:**
 - `session_id` (string): Session ID from start_region_query
 
-**Returns:** Next variant (or null if exhausted)
+**Returns:** Array of up to 5 variants (empty array if exhausted)
 
 ### 5. `close_query_session` (Streaming)
 Close an active streaming session and free resources.

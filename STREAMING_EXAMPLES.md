@@ -8,31 +8,32 @@
 ## Example 1: Find First 5 Variants in a Region
 
 ```javascript
-// Start the query
+// Start the query - returns up to 5 variants immediately
 const session = await start_region_query({
   chromosome: "20",
   start: 60000,
   end: 70000
 });
 
-console.log("First variant:", session.variant);
+console.log("First batch:", session.variants);
 
-// Get next 4 variants
-for (let i = 0; i < 4 && session.session_id; i++) {
-  const next = await get_next_variant({ session_id: session.session_id });
-  if (next.variant) {
-    console.log(`Variant ${i + 2}:`, next.variant);
-  }
-  session.session_id = next.session_id;
+// If more exist, keep fetching until we have 5 total
+const all = [...session.variants];
+let current_session_id = session.session_id;
+
+while (current_session_id && all.length < 5) {
+  const next = await get_next_variant({ session_id: current_session_id });
+  all.push(...next.variants);
+  current_session_id = next.session_id;
 }
 
 // Clean up if session still active
-if (session.session_id) {
-  await close_query_session({ session_id: session.session_id });
+if (current_session_id) {
+  await close_query_session({ session_id: current_session_id });
 }
 ```
 
-## Example 2: Process All Variants One by One
+## Example 2: Process All Variants One Batch at a Time
 
 ```javascript
 let response = await start_region_query({
@@ -43,12 +44,13 @@ let response = await start_region_query({
 
 let count = 0;
 
-while (response.session_id) {
-  if (response.variant) {
+while (true) {
+  for (const v of response.variants) {
     count++;
-    processVariant(response.variant);
+    processVariant(v);
   }
-  
+
+  if (!response.session_id) break;
   response = await get_next_variant({ session_id: response.session_id });
 }
 
@@ -68,12 +70,15 @@ const session = await start_region_query({
 let pathogenic = null;
 let current = session;
 
-while (current.session_id && !pathogenic) {
-  if (current.variant && current.variant.info?.CLNSIG === "Pathogenic") {
-    pathogenic = current.variant;
-    break;
+outer: while (true) {
+  for (const v of current.variants) {
+    if (v.info?.CLNSIG === "Pathogenic") {
+      pathogenic = v;
+      break outer;
+    }
   }
-  
+
+  if (!current.session_id) break;
   current = await get_next_variant({ session_id: current.session_id });
 }
 
@@ -183,19 +188,21 @@ async function robustStreamingQuery(chr, start, end) {
     });
     
     const variants = [];
-    
-    while (response.session_id) {
-      if (response.variant) {
-        variants.push(response.variant);
+
+    while (true) {
+      for (const v of response.variants) {
+        variants.push(v);
       }
-      
+
+      if (!response.session_id) break;
+
       try {
         response = await get_next_variant({ 
           session_id: response.session_id 
         });
       } catch (error) {
         console.error("Error getting next variant:", error);
-        
+
         // Try to close session on error
         try {
           await close_query_session({ session_id: response.session_id });

@@ -20,17 +20,17 @@ For the authoritative filter grammar/reference from the upstream library, use:
 
 ## Important API Notes
 
-- Streaming returns **one variant per call**.
+- Each call returns **up to 5 variants** in a `variants` array.
 - `get_next_variant` accepts only `session_id` (no `count` parameter).
 - Completion is indicated by:
-  - `variant: null`
+  - `variants: []` (empty array)
   - `session_id: null`
   - `has_more: false`
 
 ## Workflow
 
 1. Start a stream with `start_region_query` and an optional `filter`.
-2. Read the first returned `variant`.
+2. Process the returned `variants` array (up to 5 variants).
 3. While `session_id` is present, keep calling `get_next_variant`.
 4. Stop when `session_id` becomes `null` (or call `close_query_session` early).
 
@@ -49,11 +49,13 @@ Example response:
 
 ```json
 {
-  "variant": {
-    "chromosome": "20",
-    "position": 1234567,
-    "id": "rs123456"
-  },
+  "variants": [
+    {
+      "chromosome": "20",
+      "position": 1234567,
+      "id": "rs123456"
+    }
+  ],
   "session_id": "550e8400-e29b-41d4-a716-446655440000",
   "has_more": true,
   "reference_genome": "1000GenomesPilot-NCBI36 (from header)",
@@ -73,11 +75,13 @@ Possible in-progress response:
 
 ```json
 {
-  "variant": {
-    "chromosome": "20",
-    "position": 1235237,
-    "id": "microsat1"
-  },
+  "variants": [
+    {
+      "chromosome": "20",
+      "position": 1235237,
+      "id": "microsat1"
+    }
+  ],
   "session_id": "550e8400-e29b-41d4-a716-446655440000",
   "has_more": true,
   "reference_genome": "1000GenomesPilot-NCBI36 (from header)",
@@ -89,7 +93,7 @@ End-of-stream response:
 
 ```json
 {
-  "variant": null,
+  "variants": [],
   "session_id": null,
   "has_more": false,
   "reference_genome": "1000GenomesPilot-NCBI36 (from header)",
