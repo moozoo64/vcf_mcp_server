@@ -54,19 +54,6 @@ struct QueryByPositionParams {
 }
 
 #[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
-struct QueryByRegionParams {
-    /// Chromosome name (e.g., '1', '2', 'X', 'chr1')
-    chromosome: String,
-    /// Start position (1-based, inclusive)
-    start: u64,
-    /// End position (1-based, inclusive)
-    end: u64,
-    /// Optional filter expression (e.g., "QUAL > 30", "FILTER == PASS"). Empty or omitted means no filtering.
-    #[serde(default)]
-    filter: Option<String>,
-}
-
-#[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
 struct QueryByIdParams {
     /// Variant ID (e.g., 'rs6054257')
     id: String,
@@ -150,13 +137,6 @@ struct PositionQuery {
 }
 
 #[derive(Debug, serde::Serialize)]
-struct RegionQuery {
-    chromosome: String,
-    start: u64,
-    end: u64,
-}
-
-#[derive(Debug, serde::Serialize)]
 struct IdQuery {
     id: String,
 }
@@ -166,17 +146,6 @@ struct QueryByPositionResponse {
     status: QueryStatus,
     reference_genome: String,
     query: PositionQuery,
-    matched_chromosome: Option<String>,
-    available_chromosomes_sample: Option<Vec<String>>,
-    alternate_chromosome_suggestion: Option<String>,
-    result: QueryResult<Variant>,
-}
-
-#[derive(Debug, serde::Serialize)]
-struct QueryByRegionResponse {
-    status: QueryStatus,
-    reference_genome: String,
-    query: RegionQuery,
     matched_chromosome: Option<String>,
     available_chromosomes_sample: Option<Vec<String>>,
     alternate_chromosome_suggestion: Option<String>,
@@ -332,125 +301,6 @@ impl VcfServer {
         let payload = serde_json::to_value(response).map_err(|e| {
             McpError::internal_error(
                 format!("Failed to serialize query_by_position response: {}", e),
-                None,
-            )
-        })?;
-
-        let content = Content::json(payload)?;
-
-        self.create_result_with_logging(content, start_time)
-    }
-
-    #[tool(
-        description = "Query variants in a genomic region. Maximum region size is 10,000 bp (10 kb). Requests exceeding this limit will be rejected. Optionally filter variants using a filter expression (e.g., 'QUAL > 30', 'FILTER == PASS'). NOTE: Coordinates are genome build-specific (GRCh37 vs GRCh38). Check the reference_genome field in the response to verify which build is being queried."
-    )]
-    async fn query_by_region(
-        &self,
-        Parameters(QueryByRegionParams {
-            chromosome: requested_chromosome,
-            start,
-            end,
-            filter,
-        }): Parameters<QueryByRegionParams>,
-    ) -> Result<CallToolResult, McpError> {
-        let start_time = std::time::Instant::now();
-        const MAX_WINDOW: u64 = 10000; // 10 kb maximum region size
-
-        if start > end {
-            return Err(McpError::invalid_params(
-                format!("Invalid region: start ({}) must be <= end ({})", start, end),
-                None,
-            ));
-        }
-
-        // Validate region size
-        let window_size = end.saturating_sub(start).saturating_add(1);
-        if window_size > MAX_WINDOW {
-            return Err(McpError::invalid_params(
-                format!(
-                    "Requested region too large ({} bp). Maximum window is {} bp.",
-                    window_size, MAX_WINDOW
-                ),
-                None,
-            ));
-        }
-
-        // Validate filter expression if provided
-        let filter_str = filter.unwrap_or_default();
-        if !filter_str.trim().is_empty() {
-            self.debug_log_filter_expression("query_by_region", &filter_str);
-            let index = self.index.lock().await;
-            let filter_engine = index.filter_engine();
-            drop(index);
-            if let Err(e) = filter_engine.parse_filter(&filter_str) {
-                return Err(McpError::invalid_params(
-                    format!("Invalid filter expression: {}", e),
-                    None,
-                ));
-            }
-        }
-
-        let query_context = RegionQuery {
-            chromosome: requested_chromosome.clone(),
-            start,
-            end,
-        };
-
-        let response = {
-            let index = self.index.lock().await;
-            let (variants, matched_chr) = index.query_by_region(&requested_chromosome, start, end);
-            let filter_engine = index.filter_engine();
-
-            // Apply filter if provided
-            let filtered_variants: Vec<Variant> = variants
-                .into_iter()
-                .map(format_variant)
-                .filter(|v| {
-                    if filter_str.trim().is_empty() {
-                        true
-                    } else {
-                        let evaluation = filter_engine.evaluate(&filter_str, &v.raw_row);
-                        let (passes, eval_error) = match evaluation {
-                            Ok(p) => (p, None),
-                            Err(e) => (false, Some(e.to_string())),
-                        };
-                        self.debug_log_filter_evaluation(
-                            "query_by_region",
-                            &filter_str,
-                            v,
-                            passes,
-                            eval_error.as_deref(),
-                        );
-                        passes
-                    }
-                })
-                .collect();
-
-            let count = filtered_variants.len();
-            let result = QueryResult {
-                count,
-                items: filtered_variants,
-            };
-
-            let (status, available_sample, alternate_suggestion) =
-                build_chromosome_response(&index, &requested_chromosome, &matched_chr);
-
-            let reference_genome = index.get_reference_genome();
-
-            QueryByRegionResponse {
-                status,
-                reference_genome,
-                query: query_context,
-                matched_chromosome: matched_chr,
-                available_chromosomes_sample: available_sample,
-                alternate_chromosome_suggestion: alternate_suggestion,
-                result,
-            }
-        };
-
-        let payload = serde_json::to_value(response).map_err(|e| {
-            McpError::internal_error(
-                format!("Failed to serialize query_by_region response: {}", e),
                 None,
             )
         })?;
@@ -1067,7 +917,7 @@ impl ServerHandler for VcfServer {
                 .build(),
             server_info: Implementation::from_build_env(),
             instructions: Some(
-                "This server provides VCF variant query tools (query_by_position, query_by_region, query_by_id, start_region_query, get_next_variant, close_query_session) and a metadata resource (vcf://metadata). For large regions, use streaming tools (start_region_query + get_next_variant) to fetch variants one at a time. IMPORTANT: Genomic coordinates are specific to the reference genome build (GRCh37 vs GRCh38). Always check the reference_genome field in responses.".to_string()
+                "This server provides VCF variant query tools (query_by_position, query_by_id, start_region_query, get_next_variant, close_query_session) and a metadata resource (vcf://metadata). For large regions, use streaming tools (start_region_query + get_next_variant) to fetch variants one at a time. IMPORTANT: Genomic coordinates are specific to the reference genome build (GRCh37 vs GRCh38). Always check the reference_genome field in responses.".to_string()
             ),
         }
     }

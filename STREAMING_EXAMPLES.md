@@ -89,35 +89,7 @@ if (pathogenic) {
 }
 ```
 
-## Example 4: Compare Streaming vs Batch
-
-```javascript
-// Batch approach (all at once)
-const batch = await query_by_region({
-  chromosome: "20",
-  start: 60000,
-  end: 70000
-});
-console.log(`Batch: ${batch.result.count} variants`);
-
-// Streaming approach (one at a time)
-let stream = await start_region_query({
-  chromosome: "20",
-  start: 60000,
-  end: 70000
-});
-
-let streamCount = 0;
-while (stream.session_id) {
-  if (stream.variant) streamCount++;
-  stream = await get_next_variant({ session_id: stream.session_id });
-}
-console.log(`Streaming: ${streamCount} variants`);
-
-// Should be the same count!
-```
-
-## Example 5: Handle Chromosome Name Variations
+## Example 4: Handle Chromosome Name Variations
 
 ```javascript
 // Try with "chr" prefix
@@ -256,9 +228,4 @@ console.log(`Retrieved ${variants.length} variants`);
 - ✅ Memory constrained environment
 - ✅ Interactive LLM workflows
 
-### Use Batch (`query_by_region`) when:
-- ✅ Small regions (<100 variants)
-- ✅ Need all variants at once for analysis
-- ✅ Calculating statistics (need complete set)
-- ✅ Simpler code (one API call)
-- ✅ Faster for small result sets
+

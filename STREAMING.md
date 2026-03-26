@@ -9,7 +9,7 @@ The VCF MCP Server now supports **stateful streaming queries** that return varia
 
 ## Why Streaming?
 
-Traditional `query_by_region` returns all variants at once, which can be problematic for:
+Some query scenarios are problematic when returning all variants at once:
 - Large genomic regions (e.g., entire chromosomes)
 - Memory-constrained environments
 - Interactive LLM workflows where you want to process results incrementally
@@ -265,19 +265,8 @@ Each session stores:
 - Memory-constrained environments
 
 **Not ideal for:**
-- Small regions (<100 variants) → use `query_by_region`
-- Batch processing where you need all variants → use `query_by_region`
-
-## Comparison: Streaming vs Batch Queries
-
-| Feature | `query_by_region` | Streaming (`start_region_query` + `get_next_variant`) |
-|---------|-------------------|-------------------------------------------------------|
-| Return type | All variants at once | One variant per call |
-| Memory usage | O(n) variants | O(1) per session |
-| Total API calls | 1 | k + 1 (k = variant count) |
-| Can stop early | No | Yes |
-| Session management | Stateless | Stateful (5 min timeout) |
-| Best for | Small regions | Large regions, incremental processing |
+- Scenarios where you need all variants at once for a single-pass analysis
+- Simple queries returning fewer than ~100 variants (adds API round-trips)
 
 ## Claude Desktop Integration
 
@@ -328,7 +317,7 @@ Sessions stored in `Arc<Mutex<HashMap<String, QuerySession>>>`:
 3. **No backward iteration** (can't go to previous variants)
 4. **No random access** (can't jump to arbitrary positions within session)
 
-For these use cases, use the batch `query_by_region` tool instead.
+For these use cases, use `query_by_position` or `query_by_id` instead.
 
 ## Security Considerations
 

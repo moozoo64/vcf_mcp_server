@@ -62,7 +62,6 @@ echo '{"jsonrpc":"2.0","method":"notifications/initialized","params":{}}' >&3
 sleep 0.1
 send_and_read '{"jsonrpc":"2.0","id":2,"method":"tools/list","params":{}}'
 send_and_read '{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"query_by_position","arguments":{"chromosome":"20","position":14370}}}'
-send_and_read '{"jsonrpc":"2.0","id":4,"method":"tools/call","params":{"name":"query_by_region","arguments":{"chromosome":"20","start":14000,"end":18000}}}'
 send_and_read '{"jsonrpc":"2.0","id":5,"method":"tools/call","params":{"name":"query_by_id","arguments":{"id":"rs6054257"}}}'
 send_and_read '{"jsonrpc":"2.0","id":6,"method":"tools/call","params":{"name":"get_vcf_header","arguments":{}}}'
 send_and_read '{"jsonrpc":"2.0","id":7,"method":"tools/call","params":{"name":"start_region_query","arguments":{"chromosome":"20","start":14000,"end":18000,"filter":""}}}'
@@ -78,10 +77,10 @@ json_lines=$(printf '%s\n' "${responses[@]}")
 response_count=$(echo "$json_lines" | jq -r '.id // empty' | sort -nu | wc -l)
 
 echo -e "\n${BLUE}Test: JSON Response Count${NC}"
-if [ "$response_count" -eq "12" ]; then
-    echo -e "${GREEN}✓ Received 12 JSON responses${NC}"
+if [ "$response_count" -eq "11" ]; then
+    echo -e "${GREEN}✓ Received 11 JSON responses${NC}"
 else
-    echo -e "${RED}✗ Expected 12 responses, got $response_count${NC}"
+    echo -e "${RED}✗ Expected 11 responses, got $response_count${NC}"
     failures=$((failures + 1))
 fi
 
@@ -90,13 +89,13 @@ tools_response=$(echo "$json_lines" | jq -c 'select(.id == 2)' || true)
 if [ ! -z "$tools_response" ]; then
     tool_count=$(echo "$tools_response" | jq -r '.result.tools | length' 2>/dev/null || echo "0")
     echo -e "\n${BLUE}Test: Tool Count${NC}"
-    if [ "$tool_count" -eq "9" ]; then
-        echo -e "${GREEN}✓ Found 9 tools${NC}"
+    if [ "$tool_count" -eq "8" ]; then
+        echo -e "${GREEN}✓ Found 8 tools${NC}"
         echo "$tools_response" | jq -r '.result.tools[].name' | while read -r tool; do
             echo "  - $tool"
         done
     else
-        echo -e "${RED}✗ Expected 9 tools, found $tool_count${NC}"
+        echo -e "${RED}✗ Expected 8 tools, found $tool_count${NC}"
         failures=$((failures + 1))
     fi
 fi
@@ -109,18 +108,6 @@ if [ ! -z "$position_response" ]; then
         echo -e "${GREEN}✓ Found variant at position${NC}"
     else
         echo -e "${RED}✗ No variant found at position${NC}"
-        failures=$((failures + 1))
-    fi
-fi
-
-# Check query_by_region response (id:4)
-region_response=$(echo "$json_lines" | jq -c 'select(.id == 4)' || true)
-if [ ! -z "$region_response" ]; then
-    echo -e "\n${BLUE}Test: query_by_region${NC}"
-    if echo "$region_response" | jq -e '.result.content[0].text | fromjson | .result.count > 0' >/dev/null 2>&1; then
-        echo -e "${GREEN}✓ Found variants in region${NC}"
-    else
-        echo -e "${RED}✗ No variants found in region${NC}"
         failures=$((failures + 1))
     fi
 fi

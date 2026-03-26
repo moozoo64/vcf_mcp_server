@@ -117,8 +117,6 @@ cargo test
 - No random access within session
 - 5-minute timeout for inactive sessions
 
-For these use cases, use the existing `query_by_region` tool.
-
 ## Files Modified
 
 1. `/home/michael-simmons/Documents/Coding/vcf_mcp_server/Cargo.toml`
