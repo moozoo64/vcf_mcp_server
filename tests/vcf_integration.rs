@@ -1,5 +1,5 @@
 use std::path::PathBuf;
-use vcf_mcp_server::vcf::{format_variant, load_vcf, ReferenceGenomeSource};
+use vcf_mcp_server::vcf::{ReferenceGenomeSource, format_variant, load_vcf};
 
 #[test]
 fn test_load_compressed_vcf() {

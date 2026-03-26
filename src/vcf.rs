@@ -370,18 +370,16 @@ fn infer_genome_build_from_contigs(header: &vcf::Header) -> Option<String> {
 
     // Try both "chr1" and "1" naming conventions
     for chr_name in ["chr1", "1"] {
-        if let Some(contig) = header.contigs().get(chr_name) {
-            if let Some(length) = contig.length() {
-                let diff_grch37 =
-                    (length as i64 - CHR1_GRCH37_LENGTH as i64).unsigned_abs() as usize;
-                let diff_grch38 =
-                    (length as i64 - CHR1_GRCH38_LENGTH as i64).unsigned_abs() as usize;
+        if let Some(contig) = header.contigs().get(chr_name)
+            && let Some(length) = contig.length()
+        {
+            let diff_grch37 = (length as i64 - CHR1_GRCH37_LENGTH as i64).unsigned_abs() as usize;
+            let diff_grch38 = (length as i64 - CHR1_GRCH38_LENGTH as i64).unsigned_abs() as usize;
 
-                if diff_grch37 < TOLERANCE {
-                    return Some("GRCh37".to_string());
-                } else if diff_grch38 < TOLERANCE {
-                    return Some("GRCh38".to_string());
-                }
+            if diff_grch37 < TOLERANCE {
+                return Some("GRCh37".to_string());
+            } else if diff_grch38 < TOLERANCE {
+                return Some("GRCh38".to_string());
             }
         }
     }
@@ -396,13 +394,13 @@ fn extract_reference_genome(header: &vcf::Header) -> ReferenceGenomeInfo {
     // Try to get ##reference line from header
     // Collection can be Unstructured (Vec<String>) or Structured (IndexMap)
     // ##reference is typically unstructured with a single string value
-    if let Some(Collection::Unstructured(values)) = header.get("reference") {
-        if let Some(reference_value) = values.first() {
-            return ReferenceGenomeInfo {
-                build: reference_value.clone(),
-                source: ReferenceGenomeSource::HeaderLine,
-            };
-        }
+    if let Some(Collection::Unstructured(values)) = header.get("reference")
+        && let Some(reference_value) = values.first()
+    {
+        return ReferenceGenomeInfo {
+            build: reference_value.clone(),
+            source: ReferenceGenomeSource::HeaderLine,
+        };
     }
 
     // Fall back to inferring from contig lengths
@@ -467,19 +465,18 @@ fn convert_info_value(debug_str: &str) -> serde_json::Value {
     }
 
     // Match Integer(value)
-    if let Some(inner) = s.strip_prefix("Integer(").and_then(|s| s.strip_suffix(')')) {
-        if let Ok(num) = inner.parse::<i64>() {
-            return serde_json::Value::Number(num.into());
-        }
+    if let Some(inner) = s.strip_prefix("Integer(").and_then(|s| s.strip_suffix(')'))
+        && let Ok(num) = inner.parse::<i64>()
+    {
+        return serde_json::Value::Number(num.into());
     }
 
     // Match Float(value)
-    if let Some(inner) = s.strip_prefix("Float(").and_then(|s| s.strip_suffix(')')) {
-        if let Ok(num) = inner.parse::<f64>() {
-            if let Some(json_num) = serde_json::Number::from_f64(num) {
-                return serde_json::Value::Number(json_num);
-            }
-        }
+    if let Some(inner) = s.strip_prefix("Float(").and_then(|s| s.strip_suffix(')'))
+        && let Ok(num) = inner.parse::<f64>()
+        && let Some(json_num) = serde_json::Number::from_f64(num)
+    {
+        return serde_json::Value::Number(json_num);
     }
 
     // Match Character(value)
@@ -511,10 +508,10 @@ fn convert_info_value(debug_str: &str) -> serde_json::Value {
                     if let Ok(num) = val_str.parse::<i64>() {
                         return Some(serde_json::Value::Number(num.into()));
                     }
-                    if let Ok(num) = val_str.parse::<f64>() {
-                        if let Some(json_num) = serde_json::Number::from_f64(num) {
-                            return Some(serde_json::Value::Number(json_num));
-                        }
+                    if let Ok(num) = val_str.parse::<f64>()
+                        && let Some(json_num) = serde_json::Number::from_f64(num)
+                    {
+                        return Some(serde_json::Value::Number(json_num));
                     }
                     return Some(serde_json::Value::String(val_str.to_string()));
                 }
@@ -722,29 +719,27 @@ fn convert_sample_value(debug_str: &str) -> serde_json::Value {
     let s = debug_str;
 
     // Match Genotype pattern: Genotype(Genotype("0|0"))
-    if s.starts_with("Genotype(Genotype(\"") {
-        if let Some(inner) = s
+    if s.starts_with("Genotype(Genotype(\"")
+        && let Some(inner) = s
             .strip_prefix("Genotype(Genotype(\"")
             .and_then(|s| s.strip_suffix("\"))"))
-        {
-            return serde_json::Value::String(inner.to_string());
-        }
+    {
+        return serde_json::Value::String(inner.to_string());
     }
 
     // Match Integer(value)
-    if let Some(inner) = s.strip_prefix("Integer(").and_then(|s| s.strip_suffix(')')) {
-        if let Ok(num) = inner.parse::<i64>() {
-            return serde_json::Value::Number(num.into());
-        }
+    if let Some(inner) = s.strip_prefix("Integer(").and_then(|s| s.strip_suffix(')'))
+        && let Ok(num) = inner.parse::<i64>()
+    {
+        return serde_json::Value::Number(num.into());
     }
 
     // Match Float(value)
-    if let Some(inner) = s.strip_prefix("Float(").and_then(|s| s.strip_suffix(')')) {
-        if let Ok(num) = inner.parse::<f64>() {
-            if let Some(json_num) = serde_json::Number::from_f64(num) {
-                return serde_json::Value::Number(json_num);
-            }
-        }
+    if let Some(inner) = s.strip_prefix("Float(").and_then(|s| s.strip_suffix(')'))
+        && let Ok(num) = inner.parse::<f64>()
+        && let Some(json_num) = serde_json::Number::from_f64(num)
+    {
+        return serde_json::Value::Number(json_num);
     }
 
     // Match String("value")
@@ -768,10 +763,10 @@ fn convert_sample_value(debug_str: &str) -> serde_json::Value {
                         return serde_json::Value::Number(num.into());
                     }
                     // Try to parse as float
-                    if let Ok(num) = val_str.parse::<f64>() {
-                        if let Some(json_num) = serde_json::Number::from_f64(num) {
-                            return serde_json::Value::Number(json_num);
-                        }
+                    if let Ok(num) = val_str.parse::<f64>()
+                        && let Some(json_num) = serde_json::Number::from_f64(num)
+                    {
+                        return serde_json::Value::Number(json_num);
                     }
                     // Return as string
                     return serde_json::Value::String(val_str.to_string());

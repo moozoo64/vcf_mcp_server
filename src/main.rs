@@ -1031,10 +1031,10 @@ impl ServerHandler for VcfServer {
         let result = self.tool_router.call(tool_ctx).await;
 
         // Log errors in debug mode
-        if self.debug {
-            if let Err(ref e) = result {
-                eprintln!("[DEBUG] Tool call error: {:?}", e);
-            }
+        if self.debug
+            && let Err(ref e) = result
+        {
+            eprintln!("[DEBUG] Tool call error: {:?}", e);
         }
 
         result
@@ -1267,8 +1267,16 @@ mod tests {
 
     #[test]
     fn test_filter_engine_with_rs2710875_one_row_vcf() {
-        let content = fs::read_to_string("sample_data/rs2710875test.vcf")
-            .expect("Failed to read rs2710875test.vcf");
+        use noodles::bgzf;
+        use std::io::Read;
+
+        let file = fs::File::open("sample_data/rs2710875test.vcf.gz")
+            .expect("Failed to open rs2710875test.vcf.gz");
+        let mut bgzf_reader = bgzf::io::Reader::new(file);
+        let mut content = String::new();
+        bgzf_reader
+            .read_to_string(&mut content)
+            .expect("Failed to decompress rs2710875test.vcf.gz");
 
         let mut header_lines = Vec::new();
         let mut data_row: Option<String> = None;
