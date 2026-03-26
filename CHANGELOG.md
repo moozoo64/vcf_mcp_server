@@ -5,6 +5,11 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Changed
+- `query_by_id` now accepts a comma-separated list of variant IDs and/or `chrom:pos` coordinates (e.g., `'rs1234,chr11:46352,rs46352,chr2:74635'`). Entries with a `:` are treated as `chromosome:position` lookups; all others are looked up by variant ID. Returns a flat, deduplicated list of all matching variants. Response field renamed from `query.id` to `query.ids` (array).
+
 ## [0.2.2] - 2026
 
 ### Changed
@@ -72,7 +77,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Core Query Tools**:
   - `query_by_position`: Query variants at a specific genomic position
   - `query_by_region`: Query variants in a genomic region
-  - `query_by_id`: Query variants by variant ID (e.g., rsID)
+  - `query_by_id`: Query variants by variant ID (e.g., rsID) — supports a single ID or comma-separated list
   - `get_vcf_header`: Retrieve raw VCF header text
 - **Dual Index Support**:
   - Tabix (.tbi) index support for genomic queries

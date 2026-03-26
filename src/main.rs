@@ -55,7 +55,7 @@ struct QueryByPositionParams {
 
 #[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
 struct QueryByIdParams {
-    /// Variant ID (e.g., 'rs6054257')
+    /// Comma-separated list of variant IDs (e.g., 'rs6054257' or 'rs6054257,rs6040355,microsat1')
     id: String,
 }
 
@@ -138,7 +138,7 @@ struct PositionQuery {
 
 #[derive(Debug, serde::Serialize)]
 struct IdQuery {
-    id: String,
+    ids: Vec<String>,
 }
 
 #[derive(Debug, serde::Serialize)]
@@ -311,7 +311,7 @@ impl VcfServer {
     }
 
     #[tool(
-        description = "Query variants by variant ID (e.g., rsID). Check the reference_genome field in the response to verify which genome build the coordinates use."
+        description = "Query variants by variant ID or genomic position. Accepts a comma-separated list where each entry is either a variant ID (e.g., 'rs6054257') or a chromosome:position coordinate (e.g., 'chr11:46352' or '2:74635'). Returns a flat list of all matching variants. Check the reference_genome field in the response to verify which genome build the coordinates use."
     )]
     async fn query_by_id(
         &self,
@@ -320,11 +320,45 @@ impl VcfServer {
         let start_time = std::time::Instant::now();
         let response = {
             let index = self.index.lock().await;
-            let variants = index.query_by_id(&requested_id);
 
-            let count = variants.len();
-            let items: Vec<Variant> = variants.into_iter().map(format_variant).collect();
-            let result = QueryResult { count, items };
+            let parsed_ids: Vec<String> = requested_id
+                .split(',')
+                .map(|s| s.trim().to_string())
+                .filter(|s| !s.is_empty())
+                .collect();
+
+            let mut seen = std::collections::HashSet::new();
+            let mut all_items: Vec<Variant> = Vec::new();
+            for token in &parsed_ids {
+                let variants: Vec<Variant> = if let Some((chrom, pos_str)) = token.split_once(':') {
+                    let chrom = chrom.trim();
+                    let pos_str = pos_str.trim();
+                    if let Ok(pos) = pos_str.parse::<u64>() {
+                        let (v, _) = index.query_by_position(chrom, pos);
+                        v
+                    } else {
+                        Vec::new()
+                    }
+                } else {
+                    index.query_by_id(token)
+                };
+                for variant in variants {
+                    let key = (
+                        variant.chromosome.clone(),
+                        variant.position,
+                        variant.id.clone(),
+                    );
+                    if seen.insert(key) {
+                        all_items.push(format_variant(variant));
+                    }
+                }
+            }
+
+            let count = all_items.len();
+            let result = QueryResult {
+                count,
+                items: all_items,
+            };
 
             let status = if result.count > 0 {
                 QueryStatus::Ok
@@ -337,9 +371,7 @@ impl VcfServer {
             QueryByIdResponse {
                 status,
                 reference_genome,
-                query: IdQuery {
-                    id: requested_id.clone(),
-                },
+                query: IdQuery { ids: parsed_ids },
                 result,
             }
         };

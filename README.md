@@ -65,17 +65,39 @@ Query variants at a specific genomic position.
 ```
 
 ### 2. `query_by_id`
-Query variants by variant ID (e.g., rsID).
+Query variants by variant ID or genomic position. Accepts a single entry or a comma-separated list. Each entry is either a variant ID (e.g., `rs6054257`) or a `chromosome:position` coordinate (e.g., `chr11:46352`). Returns a flat, deduplicated list of all matching variants.
 
 **Parameters:**
-- `id` (string): Variant ID (e.g., 'rs6054257')
+- `id` (string): Comma-separated list of variant IDs and/or `chrom:pos` coordinates
 
-**Example:**
+**Examples:**
+
+Single ID:
 ```json
 {
   "name": "query_by_id",
   "arguments": {
     "id": "rs6054257"
+  }
+}
+```
+
+Multiple IDs:
+```json
+{
+  "name": "query_by_id",
+  "arguments": {
+    "id": "rs6054257,rs6040355,microsat1"
+  }
+}
+```
+
+Mixed IDs and positions:
+```json
+{
+  "name": "query_by_id",
+  "arguments": {
+    "id": "rs1234,chr11:46352,rs46352,chr2:74635"
   }
 }
 ```

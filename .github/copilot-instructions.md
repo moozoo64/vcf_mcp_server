@@ -20,7 +20,7 @@ This is a **Model Context Protocol (MCP) server** that exposes VCF (Variant Call
 2. **MCP Server Layer** ([src/main.rs](src/main.rs))
    - `VcfServer`: Implements MCP protocol using `rmcp` crate
    - Exposes 9 tools:
-     - `query_by_position`, `query_by_id`: Direct queries
+     - `query_by_position`, `query_by_id`: Direct queries (`query_by_id` accepts a comma-separated list of IDs and/or `chrom:pos` coordinates, e.g., `'rs1234,chr11:46352,rs5678'`)
      - `start_region_query`, `get_next_variant`, `close_query_session`: Streaming API
      - `get_vcf_header`: Raw VCF header retrieval
      - `get_statistics`: Comprehensive VCF statistics

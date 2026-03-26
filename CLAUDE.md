@@ -72,7 +72,7 @@ cargo bench
 Benchmarks use the Criterion framework to measure performance of VCF query operations. This helps detect performance regressions in:
 
 - `query_by_position`: Lookup variants at specific genomic positions
-- `query_by_id`: Lookup variants by their ID (e.g., rsID)
+- `query_by_id`: Lookup variants by their ID or position — accepts a comma-separated list where each entry is a variant ID (e.g., `'rs6054257'`) or a `chrom:pos` coordinate (e.g., `'chr11:46352'`); entries can be mixed (e.g., `'rs6054257,chr11:46352,rs6040355'`)
 
 Criterion automatically compares new runs against saved baselines and reports statistical differences in the terminal output.
 
