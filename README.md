@@ -6,7 +6,7 @@
 
 _Original disclaimer: No warranty express or implied. This was totally vibe-coded while chronicly sleep-deprived and watching Bluey and Tremors 5._ Use at your own risk. AFAICT it works and outputs line up with what I get through traditional tools.
 
-**Current Version**: 0.2.0-fork | [Changelog](CHANGELOG.md)
+**Current Version**: 0.2.3 | [Changelog](CHANGELOG.md)
 
 ---
 
@@ -64,35 +64,15 @@ Query variants at a specific genomic position.
 }
 ```
 
-### 2. `query_by_region`
-Query variants in a genomic region. **Note: Region size is limited to 10,000 base pairs (10kb) for performance reasons.** For larger regions, use the streaming API (`start_region_query`).
+### 2. `query_by_id`
+Query variants by variant ID or genomic position. Accepts a single entry or a comma-separated list. Each entry is either a variant ID (e.g., `rs6054257`) or a `chromosome:position` coordinate (e.g., `chr11:46352`). Returns a flat, deduplicated list of all matching variants.
 
 **Parameters:**
-- `chromosome` (string): Chromosome name (e.g., '1', '2', 'X', 'chr1')
-- `start` (integer): Start position (1-based, inclusive)
-- `end` (integer): End position (1-based, inclusive)
-- `filter` (string, optional): Filter expression to select variants (see [FILTER_EXAMPLES.md](FILTER_EXAMPLES.md))
+- `id` (string): Comma-separated list of variant IDs and/or `chrom:pos` coordinates
 
-**Example:**
-```json
-{
-  "name": "query_by_region",
-  "arguments": {
-    "chromosome": "20",
-    "start": 14000,
-    "end": 18000,
-    "filter": "QUAL > 30 && FILTER == \"PASS\""
-  }
-}
-```
+**Examples:**
 
-### 3. `query_by_id`
-Query variants by variant ID (e.g., rsID).
-
-**Parameters:**
-- `id` (string): Variant ID (e.g., 'rs6054257')
-
-**Example:**
+Single ID:
 ```json
 {
   "name": "query_by_id",
@@ -102,7 +82,27 @@ Query variants by variant ID (e.g., rsID).
 }
 ```
 
-### 4. `start_region_query` (Streaming)
+Multiple IDs:
+```json
+{
+  "name": "query_by_id",
+  "arguments": {
+    "id": "rs6054257,rs6040355,microsat1"
+  }
+}
+```
+
+Mixed IDs and positions:
+```json
+{
+  "name": "query_by_id",
+  "arguments": {
+    "id": "rs1234,chr11:46352,rs46352,chr2:74635"
+  }
+}
+```
+
+### 3. `start_region_query` (Streaming)
 Start a streaming query session for a genomic region. Returns one variant at a time.
 
 **Parameters:**
@@ -111,17 +111,17 @@ Start a streaming query session for a genomic region. Returns one variant at a t
 - `end` (integer): End position (1-based, inclusive)
 - `filter` (string, optional): Filter expression to select variants (see [FILTER_EXAMPLES.md](FILTER_EXAMPLES.md))
 
-**Returns:** First variant + session_id for subsequent calls
+**Returns:** Array of up to 5 variants + session_id for subsequent calls
 
-### 5. `get_next_variant` (Streaming)
+### 4. `get_next_variant` (Streaming)
 Get the next variant from an active streaming session.
 
 **Parameters:**
 - `session_id` (string): Session ID from start_region_query
 
-**Returns:** Next variant (or null if exhausted)
+**Returns:** Array of up to 5 variants (empty array if exhausted)
 
-### 6. `close_query_session` (Streaming)
+### 5. `close_query_session` (Streaming)
 Close an active streaming session and free resources.
 
 **Parameters:**
@@ -129,7 +129,7 @@ Close an active streaming session and free resources.
 
 **See [STREAMING.md](STREAMING.md) for detailed streaming API documentation.**
 
-### 7. `get_vcf_header`
+### 6. `get_vcf_header`
 Get the raw VCF file header text. **By default, `##contig` lines are excluded** to reduce clutter. Use the search parameter to filter for specific header types or to include contig definitions.
 
 **Parameters:**
@@ -177,7 +177,7 @@ Get only FILTER definitions:
 }
 ```
 
-### 8. `get_statistics`
+### 7. `get_statistics`
 Get comprehensive statistics about the VCF file including variant counts, quality metrics, and variant type distributions. **By default, `variants_per_chromosome` is limited to the top 25 chromosomes by variant count** to reduce response size.
 
 **Parameters:**
@@ -187,7 +187,6 @@ Get comprehensive statistics about the VCF file including variant counts, qualit
 - Total variant count
 - SNP/insertion/deletion/MNP/complex variant counts
 - Quality score statistics (min, max, mean)
-- Depth statistics
 - Filter status distribution
 - Chromosome-specific variant counts (limited to top N chromosomes)
 
@@ -221,11 +220,13 @@ Get statistics with top 10 chromosomes only:
 }
 ```
 
-### 9. `get_documentation`
+### 8. `get_documentation`
 Get embedded documentation for this MCP server.
 
 **Parameters:**
-- `doc_type` (string): Type of documentation - "readme", "streaming", "filters", "streaming-filters", or "all"
+- `doc_type` (string): Type of documentation - "readme", "streaming", "filters", "streaming-filters", "filterlib", or "all"
+
+**Note:** `doc_type: "filterlib"` returns the full documentation exposed by the upstream `vcf-filter` library through this server.
 
 **Example:**
 ```json
@@ -239,7 +240,18 @@ Get embedded documentation for this MCP server.
 
 ## Filter Support
 
-The server supports advanced variant filtering using the [vcf-filter](https://github.com/moozoo64/vcf-filter) library. Filters can be applied to `query_by_region` and `start_region_query` tools.
+The server supports advanced variant filtering using the [vcf-filter](https://github.com/moozoo64/vcf-filter) library. Filters can be applied to the `start_region_query` tool.
+
+For the canonical filter grammar/reference from the library itself, call:
+
+```json
+{
+  "name": "get_documentation",
+  "arguments": {
+    "doc_type": "filterlib"
+  }
+}
+```
 
 **Example filters:**
 - `QUAL > 30` - Quality score greater than 30
@@ -298,6 +310,8 @@ If not, you can create them using the following commands:
    ```
 
 The server will automatically detect and use `.csi` or `.tbi` index files if present, or build an in-memory tabix index. The index will be saved alongside your VCF file if it doesn't already exist and `--never-save-index` was not used.
+
+For faster startup, the server also maintains derived `.idx` and `.stats` cache files next to the VCF for ID lookups and precomputed statistics. These caches are stored as JSON so they are easier to inspect and safer to evolve across releases. Older cache files are treated as disposable derived artifacts and will be rebuilt automatically if they cannot be read.
 
 ### Uncompressed VCF Files
 

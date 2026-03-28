@@ -15,18 +15,17 @@ This is a **Model Context Protocol (MCP) server** that exposes VCF (Variant Call
    - `GenomicIndex` enum: Wraps both `tabix::Index` (.tbi) and `csi::Index` (.csi)
    - Handles chromosome name normalization (e.g., "chr1" ↔ "1")
    - Manages two indices: genomic (position/region queries) and hash map (ID queries)
-   - Index persistence: `.tbi`/`.csi` files for genomic, `.idx` files for ID lookups
+   - Index persistence: `.tbi`/`.csi` files for genomic, `.idx` files for ID lookups, and `.stats` files for cached statistics
 
 2. **MCP Server Layer** ([src/main.rs](src/main.rs))
    - `VcfServer`: Implements MCP protocol using `rmcp` crate
    - Exposes 9 tools:
-     - `query_by_position`, `query_by_region`, `query_by_id`: Direct queries
+     - `query_by_position`, `query_by_id`: Direct queries (`query_by_id` accepts a comma-separated list of IDs and/or `chrom:pos` coordinates, e.g., `'rs1234,chr11:46352,rs5678'`)
      - `start_region_query`, `get_next_variant`, `close_query_session`: Streaming API
      - `get_vcf_header`: Raw VCF header retrieval
      - `get_statistics`: Comprehensive VCF statistics
      - `get_documentation`: Embedded documentation
-   - Supports variant filtering via `vcf-filter` library on `query_by_region` and `start_region_query`
-   - **10kb region size limit** on `query_by_region` for performance; use streaming for larger regions
+   - Supports variant filtering via `vcf-filter` library on `start_region_query`
    - Uses `#[tool_router]` macro from rmcp to auto-generate tool schema
    - Wraps `VcfIndex` in `Arc<Mutex<>>` for async access
    - Stateful streaming sessions with 5-minute timeout and UUID-based session IDs
@@ -85,7 +84,7 @@ cargo bench
 5. Lock index: `let index = self.index.lock().await;`
 6. Query data, serialize to JSON via `Content::json()`, return `CallToolResult::success(vec![content])`
 
-**Example**: See `query_by_position` in [src/main.rs](src/main.rs#L143-L193)
+**Example**: See `query_by_position` in [src/main.rs](src/main.rs#L262-L307)
 
 ## Project-Specific Conventions
 
@@ -118,7 +117,7 @@ Two types of genomic indices, both with disk persistence:
 2. **ID Index** (`.vcf.gz.idx` file)
    - HashMap of variant IDs → `[(chromosome, position)]`
    - Required because genomic indices can't query by ID
-   - Binary format via `bincode` crate
+   - JSON format via `serde_json` for easier inspection and version resilience
    - Same save/load logic as genomic indices
 
 **Race condition handling**: If index appears during build, discard in-progress build (see [src/vcf.rs](src/vcf.rs#L673-L680))

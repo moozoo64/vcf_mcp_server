@@ -2,18 +2,20 @@ mod vcf;
 
 use clap::Parser;
 use rmcp::{
+    ErrorData as McpError, RoleServer, ServerHandler, ServiceExt,
     handler::server::{router::tool::ToolRouter, tool::ToolCallContext, wrapper::Parameters},
     model::*,
     schemars,
     service::RequestContext,
-    tool, tool_router, ErrorData as McpError, RoleServer, ServerHandler, ServiceExt,
+    tool, tool_router,
 };
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::Arc;
 use tokio::sync::Mutex;
 use uuid::Uuid;
-use vcf::{format_variant, load_vcf, Variant, VcfIndex};
+use vcf::{Variant, VcfIndex, format_variant, load_vcf};
+use vcf_filter::docs as filter_docs;
 
 // Embed documentation at compile time
 const README_DOCS: &str = include_str!("../README.md");
@@ -52,18 +54,8 @@ struct QueryByPositionParams {
 }
 
 #[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
-struct QueryByRegionParams {
-    /// Chromosome name (e.g., '1', '2', 'X', 'chr1')
-    chromosome: String,
-    /// Start position (1-based, inclusive)
-    start: u64,
-    /// End position (1-based, inclusive)
-    end: u64,
-}
-
-#[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
 struct QueryByIdParams {
-    /// Variant ID (e.g., 'rs6054257')
+    /// Comma-separated list of variant IDs (e.g., 'rs6054257' or 'rs6054257,rs6040355,microsat1')
     id: String,
 }
 
@@ -112,7 +104,7 @@ struct CloseSessionParams {
 
 #[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
 struct GetDocumentationParams {
-    /// Which documentation to retrieve: "readme", "streaming", "filters", "streaming-filters", or "all"
+    /// Which documentation to retrieve: "readme", "streaming", "filters", "streaming-filters", "filterlib", or "all"
     #[serde(default = "default_doc_type")]
     doc_type: String,
 }
@@ -145,15 +137,8 @@ struct PositionQuery {
 }
 
 #[derive(Debug, serde::Serialize)]
-struct RegionQuery {
-    chromosome: String,
-    start: u64,
-    end: u64,
-}
-
-#[derive(Debug, serde::Serialize)]
 struct IdQuery {
-    id: String,
+    ids: Vec<String>,
 }
 
 #[derive(Debug, serde::Serialize)]
@@ -161,17 +146,6 @@ struct QueryByPositionResponse {
     status: QueryStatus,
     reference_genome: String,
     query: PositionQuery,
-    matched_chromosome: Option<String>,
-    available_chromosomes_sample: Option<Vec<String>>,
-    alternate_chromosome_suggestion: Option<String>,
-    result: QueryResult<Variant>,
-}
-
-#[derive(Debug, serde::Serialize)]
-struct QueryByRegionResponse {
-    status: QueryStatus,
-    reference_genome: String,
-    query: RegionQuery,
     matched_chromosome: Option<String>,
     available_chromosomes_sample: Option<Vec<String>>,
     alternate_chromosome_suggestion: Option<String>,
@@ -188,8 +162,8 @@ struct QueryByIdResponse {
 
 #[derive(Debug, serde::Serialize)]
 struct StreamQueryResponse {
-    /// Next variant in region, or null if exhausted
-    variant: Option<Variant>,
+    /// Variants in this batch (up to 5), or empty if exhausted
+    variants: Vec<Variant>,
     /// Session ID for subsequent calls, or null if query complete
     session_id: Option<String>,
     /// Whether more variants exist in this region
@@ -203,9 +177,13 @@ struct QuerySession {
     chromosome: String,
     start: u64,
     end: u64,
-    // Last position returned (to resume from next position)
+    // Last position returned to the client (used to resume pagination)
     last_position: Option<u64>,
-    created_at: std::time::Instant,
+    // Number of variants at last_position already sent to the client.
+    // Required to correctly resume when a page boundary falls inside a group
+    // of variants that all share the same genomic position.
+    last_position_skip: usize,
+    last_accessed_at: std::time::Instant,
     // Filter expression to apply to variants
     filter: String,
 }
@@ -250,6 +228,39 @@ impl VcfServer {
             );
         }
         Ok(CallToolResult::success(vec![content]))
+    }
+
+    fn debug_log_filter_expression(&self, context: &str, filter_expression: &str) {
+        if self.debug {
+            eprintln!(
+                "[DEBUG] Filter expression ({}) sent to filter engine: {:?}",
+                context, filter_expression
+            );
+        }
+    }
+
+    fn debug_log_filter_evaluation(
+        &self,
+        context: &str,
+        filter_expression: &str,
+        variant: &Variant,
+        passes: bool,
+        eval_error: Option<&str>,
+    ) {
+        if !self.debug {
+            return;
+        }
+
+        eprintln!(
+            "[DEBUG] Filter evaluate ({}) | variant={}:{} id={} | passes={} | error={} | filter={:?}",
+            context,
+            variant.chromosome,
+            variant.position,
+            variant.id,
+            passes,
+            eval_error.unwrap_or(""),
+            filter_expression
+        );
     }
 
     #[tool(
@@ -304,74 +315,7 @@ impl VcfServer {
     }
 
     #[tool(
-        description = "Query variants in a genomic region. Maximum region size is 10,000 bp (10 kb). Requests exceeding this limit will be rejected. NOTE: Coordinates are genome build-specific (GRCh37 vs GRCh38). Check the reference_genome field in the response to verify which build is being queried."
-    )]
-    async fn query_by_region(
-        &self,
-        Parameters(QueryByRegionParams {
-            chromosome: requested_chromosome,
-            start,
-            end,
-        }): Parameters<QueryByRegionParams>,
-    ) -> Result<CallToolResult, McpError> {
-        let start_time = std::time::Instant::now();
-        const MAX_WINDOW: u64 = 10000; // 10 kb maximum region size
-
-        // Validate region size
-        if end > start && (end - start) > MAX_WINDOW {
-            return Err(McpError::invalid_params(
-                format!(
-                    "Requested region too large ({} bp). Maximum window is {} bp.",
-                    end - start,
-                    MAX_WINDOW
-                ),
-                None,
-            ));
-        }
-
-        let query_context = RegionQuery {
-            chromosome: requested_chromosome.clone(),
-            start,
-            end,
-        };
-
-        let response = {
-            let index = self.index.lock().await;
-            let (variants, matched_chr) = index.query_by_region(&requested_chromosome, start, end);
-            let count = variants.len();
-            let items: Vec<Variant> = variants.into_iter().map(format_variant).collect();
-            let result = QueryResult { count, items };
-
-            let (status, available_sample, alternate_suggestion) =
-                build_chromosome_response(&index, &requested_chromosome, &matched_chr);
-
-            let reference_genome = index.get_reference_genome();
-
-            QueryByRegionResponse {
-                status,
-                reference_genome,
-                query: query_context,
-                matched_chromosome: matched_chr,
-                available_chromosomes_sample: available_sample,
-                alternate_chromosome_suggestion: alternate_suggestion,
-                result,
-            }
-        };
-
-        let payload = serde_json::to_value(response).map_err(|e| {
-            McpError::internal_error(
-                format!("Failed to serialize query_by_region response: {}", e),
-                None,
-            )
-        })?;
-
-        let content = Content::json(payload)?;
-
-        self.create_result_with_logging(content, start_time)
-    }
-
-    #[tool(
-        description = "Query variants by variant ID (e.g., rsID). Check the reference_genome field in the response to verify which genome build the coordinates use."
+        description = "Query variants by variant ID or genomic position. Accepts a comma-separated list where each entry is either a variant ID (e.g., 'rs6054257') or a chromosome:position coordinate (e.g., 'chr11:46352' or '2:74635'). Returns a flat list of all matching variants. Check the reference_genome field in the response to verify which genome build the coordinates use."
     )]
     async fn query_by_id(
         &self,
@@ -380,11 +324,45 @@ impl VcfServer {
         let start_time = std::time::Instant::now();
         let response = {
             let index = self.index.lock().await;
-            let variants = index.query_by_id(&requested_id);
 
-            let count = variants.len();
-            let items: Vec<Variant> = variants.into_iter().map(format_variant).collect();
-            let result = QueryResult { count, items };
+            let parsed_ids: Vec<String> = requested_id
+                .split(',')
+                .map(|s| s.trim().to_string())
+                .filter(|s| !s.is_empty())
+                .collect();
+
+            let mut seen = std::collections::HashSet::new();
+            let mut all_items: Vec<Variant> = Vec::new();
+            for token in &parsed_ids {
+                let variants: Vec<Variant> = if let Some((chrom, pos_str)) = token.split_once(':') {
+                    let chrom = chrom.trim();
+                    let pos_str = pos_str.trim();
+                    if let Ok(pos) = pos_str.parse::<u64>() {
+                        let (v, _) = index.query_by_position(chrom, pos);
+                        v
+                    } else {
+                        Vec::new()
+                    }
+                } else {
+                    index.query_by_id(token)
+                };
+                for variant in variants {
+                    let key = (
+                        variant.chromosome.clone(),
+                        variant.position,
+                        variant.id.clone(),
+                    );
+                    if seen.insert(key) {
+                        all_items.push(format_variant(variant));
+                    }
+                }
+            }
+
+            let count = all_items.len();
+            let result = QueryResult {
+                count,
+                items: all_items,
+            };
 
             let status = if result.count > 0 {
                 QueryStatus::Ok
@@ -397,9 +375,7 @@ impl VcfServer {
             QueryByIdResponse {
                 status,
                 reference_genome,
-                query: IdQuery {
-                    id: requested_id.clone(),
-                },
+                query: IdQuery { ids: parsed_ids },
                 result,
             }
         };
@@ -480,7 +456,7 @@ impl VcfServer {
     }
 
     #[tool(
-        description = "Start a new streaming query session for a genomic region. Returns the first variant and a session_id for subsequent calls. Use get_next_variant to retrieve remaining variants one at a time. Optionally filter variants using a filter expression (e.g., 'QUAL > 30 AND FILTER == PASS')."
+        description = "Start a new streaming query session for a genomic region. Returns up to 5 variants per call. If has_more is true, use get_next_variant with the returned session_id to retrieve subsequent batches. Optionally filter variants using a filter expression (e.g., 'QUAL > 30 AND FILTER == PASS')."
     )]
     async fn start_region_query(
         &self,
@@ -492,10 +468,20 @@ impl VcfServer {
         }): Parameters<StreamRegionParams>,
     ) -> Result<CallToolResult, McpError> {
         let start_time = std::time::Instant::now();
+        const BATCH_SIZE: usize = 5;
+
+        if start > end {
+            return Err(McpError::invalid_params(
+                format!("Invalid region: start ({}) must be <= end ({})", start, end),
+                None,
+            ));
+        }
+
         // Validate filter expression before processing
         let index = self.index.lock().await;
 
         if !filter.trim().is_empty() {
+            self.debug_log_filter_expression("start_region_query", &filter);
             let filter_engine = index.filter_engine();
             drop(index); // Drop lock before potentially expensive operation
             if let Err(e) = filter_engine.parse_filter(&filter) {
@@ -510,41 +496,72 @@ impl VcfServer {
 
         let index = self.index.lock().await;
 
-        // Find matching chromosome (handles chr1 vs 1 normalization)
-        let matched_chr = index.get_available_chromosomes().into_iter().find(|chr| {
-            chr.to_lowercase() == requested_chromosome.to_lowercase()
-                || chr.to_lowercase() == format!("chr{}", requested_chromosome).to_lowercase()
-                || chr.to_lowercase()
-                    == requested_chromosome
-                        .strip_prefix("chr")
-                        .unwrap_or(&requested_chromosome)
-                        .to_lowercase()
-        });
-
-        let matched_chr_name = matched_chr.ok_or_else(|| {
-            McpError::internal_error(
+        // Query the region and resolve matching chromosome (handles chr1 vs 1 normalization)
+        let (region_variants, matched_chr) =
+            index.query_by_region(&requested_chromosome, start, end);
+        let matched_chr_name = if let Some(chr) = matched_chr {
+            chr
+        } else {
+            let available_sample: Vec<String> = index
+                .get_available_chromosomes()
+                .into_iter()
+                .take(5)
+                .collect();
+            let alternate = if requested_chromosome.starts_with("chr") {
+                requested_chromosome
+                    .strip_prefix("chr")
+                    .unwrap_or(&requested_chromosome)
+                    .to_string()
+            } else {
+                format!("chr{}", requested_chromosome)
+            };
+            return Err(McpError::invalid_params(
                 format!(
-                    "Chromosome '{}' not found in VCF file",
-                    requested_chromosome
+                    "Chromosome '{}' not found in VCF file. Try '{}'. Available chromosomes (first 5): {:?}",
+                    requested_chromosome, alternate, available_sample
                 ),
                 None,
-            )
-        })?;
+            ));
+        };
 
-        // Query the region and find first variant that passes filter
-        let (region_variants, _) = index.query_by_region(&matched_chr_name, start, end);
         let filter_engine = index.filter_engine();
 
-        let first_variant = region_variants.into_iter().map(format_variant).find(|v| {
-            // Use vcf-filter to evaluate filter expression
-            filter_engine.evaluate(&filter, &v.raw_row).unwrap_or(false)
-        });
+        // Collect up to BATCH_SIZE+1 filtered variants; the extra one tells us if has_more is true
+        let mut batch: Vec<Variant> = region_variants
+            .into_iter()
+            .map(format_variant)
+            .filter(|v| {
+                if filter.trim().is_empty() {
+                    true
+                } else {
+                    let evaluation = filter_engine.evaluate(&filter, &v.raw_row);
+                    let (passes, eval_error) = match evaluation {
+                        Ok(p) => (p, None),
+                        Err(e) => (false, Some(e.to_string())),
+                    };
+                    self.debug_log_filter_evaluation(
+                        "start_region_query",
+                        &filter,
+                        v,
+                        passes,
+                        eval_error.as_deref(),
+                    );
+                    passes
+                }
+            })
+            .take(BATCH_SIZE + 1)
+            .collect();
 
-        // If no variants found, return graceful response (consistent with get_next_variant)
-        if first_variant.is_none() {
-            let reference_genome = index.get_reference_genome();
+        let has_more = batch.len() > BATCH_SIZE;
+        if has_more {
+            batch.truncate(BATCH_SIZE);
+        }
+
+        let reference_genome = index.get_reference_genome();
+
+        if batch.is_empty() {
             let response = StreamQueryResponse {
-                variant: None,
+                variants: vec![],
                 session_id: None,
                 has_more: false,
                 reference_genome,
@@ -562,31 +579,37 @@ impl VcfServer {
             return self.create_result_with_logging(content, start_time);
         }
 
-        let first_variant = first_variant.unwrap();
+        let last_position = batch.last().unwrap().position;
+        // Count how many variants at last_position are included in this batch.
+        // This is needed so get_next_variant can skip them on resume without
+        // incrementing the position and missing same-position variants.
+        let last_position_skip = batch.iter().filter(|v| v.position == last_position).count();
 
-        // Create session
-        let session_id = Uuid::new_v4().to_string();
-        let session = QuerySession {
-            chromosome: matched_chr_name.clone(),
-            start,
-            end,
-            last_position: Some(first_variant.position),
-            created_at: std::time::Instant::now(),
-            filter: filter.clone(),
+        // Create session only when there are more variants beyond this batch
+        let session_id = if has_more {
+            let id = Uuid::new_v4().to_string();
+            let session = QuerySession {
+                chromosome: matched_chr_name.clone(),
+                start,
+                end,
+                last_position: Some(last_position),
+                last_position_skip,
+                last_accessed_at: std::time::Instant::now(),
+                filter: filter.clone(),
+            };
+
+            drop(index); // Release lock before acquiring sessions lock
+            let mut sessions = self.query_sessions.lock().await;
+            sessions.insert(id.clone(), session);
+            Some(id)
+        } else {
+            None
         };
 
-        drop(index); // Release lock before acquiring sessions lock
-        let mut sessions = self.query_sessions.lock().await;
-        sessions.insert(session_id.clone(), session);
-        drop(sessions);
-
-        let index = self.index.lock().await;
-        let reference_genome = index.get_reference_genome();
-
         let response = StreamQueryResponse {
-            variant: Some(first_variant),
-            session_id: Some(session_id),
-            has_more: true, // Assume yes until we check
+            variants: batch,
+            session_id,
+            has_more,
             reference_genome,
             matched_chromosome: Some(matched_chr_name),
         };
@@ -603,61 +626,108 @@ impl VcfServer {
     }
 
     #[tool(
-        description = "Get the next variant from an active streaming query session. Returns one variant at a time. When has_more is false, the session is complete and automatically closed."
+        description = "Get the next batch of variants (up to 5) from an active streaming query session. When has_more is false, the session is complete and automatically closed."
     )]
     async fn get_next_variant(
         &self,
         Parameters(NextVariantParams { session_id }): Parameters<NextVariantParams>,
     ) -> Result<CallToolResult, McpError> {
         let start_time = std::time::Instant::now();
-        let mut sessions = self.query_sessions.lock().await;
+        const BATCH_SIZE: usize = 5;
 
-        let session = sessions.get(&session_id).ok_or_else(|| {
-            McpError::internal_error(
-                "Session not found or expired. Start a new query with start_region_query.",
-                None,
+        let (chromosome, last_pos, last_pos_skip, end, filter) = {
+            let mut sessions = self.query_sessions.lock().await;
+
+            let session = sessions.get_mut(&session_id).ok_or_else(|| {
+                McpError::internal_error(
+                    "Session not found or expired. Start a new query with start_region_query.",
+                    None,
+                )
+            })?;
+
+            // Check session inactivity timeout (5 minutes)
+            if session.last_accessed_at.elapsed().as_secs() > 300 {
+                sessions.remove(&session_id);
+                return Err(McpError::internal_error(
+                    "Session expired. Start a new query.",
+                    None,
+                ));
+            }
+
+            session.last_accessed_at = std::time::Instant::now();
+
+            (
+                session.chromosome.clone(),
+                session.last_position.unwrap_or(session.start),
+                session.last_position_skip,
+                session.end,
+                session.filter.clone(),
             )
-        })?;
-
-        // Check session timeout (5 minutes)
-        if session.created_at.elapsed().as_secs() > 300 {
-            sessions.remove(&session_id);
-            return Err(McpError::internal_error(
-                "Session expired. Start a new query.",
-                None,
-            ));
-        }
-
-        // Get session details before releasing lock
-        let chromosome = session.chromosome.clone();
-        let last_pos = session.last_position.unwrap_or(session.start);
-        let end = session.end;
-        let filter = session.filter.clone();
-        drop(sessions);
+        };
 
         let index = self.index.lock().await;
 
-        // Query from next position after last returned variant
-        let next_pos = last_pos + 1;
-        let (variants, _) = index.query_by_region(&chromosome, next_pos, end);
+        // Query from last_pos (not last_pos+1) so we include any remaining variants
+        // at last_pos that were not returned on the previous page, then skip past
+        // the ones that were already sent.
+        let (variants, _) = index.query_by_region(&chromosome, last_pos, end);
         let filter_engine = index.filter_engine();
 
-        // Find next variant that passes filter
-        let next_variant = variants.into_iter().map(format_variant).find(|v| {
-            filter_engine.evaluate(&filter, &v.raw_row).unwrap_or(false) // Treat filter errors as non-match
-        });
+        if !filter.trim().is_empty() {
+            self.debug_log_filter_expression("get_next_variant", &filter);
+        }
 
-        if next_variant.is_none() {
+        // Collect up to BATCH_SIZE+1 filtered variants; the extra one tells us if has_more is true
+        let mut skip_remaining = last_pos_skip;
+        let mut batch: Vec<Variant> = variants
+            .into_iter()
+            .map(format_variant)
+            .filter(|v| {
+                if filter.trim().is_empty() {
+                    true
+                } else {
+                    let evaluation = filter_engine.evaluate(&filter, &v.raw_row);
+                    let (passes, eval_error) = match evaluation {
+                        Ok(p) => (p, None),
+                        Err(e) => (false, Some(e.to_string())),
+                    };
+                    self.debug_log_filter_evaluation(
+                        "get_next_variant",
+                        &filter,
+                        v,
+                        passes,
+                        eval_error.as_deref(),
+                    );
+                    passes
+                }
+            })
+            .skip_while(|v| {
+                // Skip variants at last_pos that were already sent on the previous page.
+                if v.position == last_pos && skip_remaining > 0 {
+                    skip_remaining -= 1;
+                    true
+                } else {
+                    false
+                }
+            })
+            .take(BATCH_SIZE + 1)
+            .collect();
+
+        let has_more = batch.len() > BATCH_SIZE;
+        if has_more {
+            batch.truncate(BATCH_SIZE);
+        }
+
+        if batch.is_empty() {
             // No more variants - close session
+            let reference_genome = index.get_reference_genome();
             drop(index);
+
             let mut sessions = self.query_sessions.lock().await;
             sessions.remove(&session_id);
 
-            let index = self.index.lock().await;
-            let reference_genome = index.get_reference_genome();
-
             let response = StreamQueryResponse {
-                variant: None,
+                variants: vec![],
                 session_id: None,
                 has_more: false,
                 reference_genome,
@@ -675,33 +745,33 @@ impl VcfServer {
             return self.create_result_with_logging(content, start_time);
         }
 
-        // Get next variant
-        let next_variant_data = next_variant.unwrap();
-        let new_position = next_variant_data.position;
-
-        // Check if there are more variants after this one that pass the filter
-        let (peek_variants, _) = index.query_by_region(&chromosome, new_position + 1, end);
-        let has_more = peek_variants.into_iter().map(format_variant).any(|v| {
-            filter_engine.evaluate(&filter, &v.raw_row).unwrap_or(false) // Treat filter errors as non-match
-        });
-
+        let last_position = batch.last().unwrap().position;
+        // Compute how many variants at last_position are in this batch, so the
+        // next page can skip past them if the boundary falls at that position again.
+        let count_at_last = batch.iter().filter(|v| v.position == last_position).count();
+        let new_skip = if last_position == last_pos {
+            // Still ending at the same position — accumulate the skip count.
+            last_pos_skip + count_at_last
+        } else {
+            count_at_last
+        };
         let reference_genome = index.get_reference_genome();
         drop(index);
 
-        // Update session with new position
+        // Update session with last position and skip count for this batch
         let mut sessions = self.query_sessions.lock().await;
         if let Some(session) = sessions.get_mut(&session_id) {
-            session.last_position = Some(new_position);
+            session.last_position = Some(last_position);
+            session.last_position_skip = new_skip;
         }
 
-        // If no more variants, remove session
         if !has_more {
             sessions.remove(&session_id);
         }
         drop(sessions);
 
         let response = StreamQueryResponse {
-            variant: Some(next_variant_data),
+            variants: batch,
             session_id: if has_more { Some(session_id) } else { None },
             has_more,
             reference_genome,
@@ -740,7 +810,7 @@ impl VcfServer {
     }
 
     #[tool(
-        description = "Get embedded documentation for the VCF MCP server. Available types: 'readme' (main documentation), 'streaming' (streaming query guide), 'filters' (filter syntax examples), 'streaming-filters' (streaming with filters guide), 'all' (complete documentation)."
+        description = "Get embedded documentation for the VCF MCP server. Available types: 'readme' (main documentation), 'streaming' (streaming query guide), 'filters' (filter syntax examples), 'streaming-filters' (streaming with filters guide), 'filterlib' (vcf-filter library syntax and operators), 'all' (complete documentation)."
     )]
     async fn get_documentation(
         &self,
@@ -753,6 +823,17 @@ impl VcfServer {
             "filters" | "filter" => (FILTER_DOCS, "FILTER_EXAMPLES.md"),
             "streaming-filters" | "streaming_filters" => {
                 (STREAMING_FILTER_DOCS, "STREAMING_FILTER_EXAMPLES.md")
+            }
+            "filterlib" | "filter_lib" | "filter-lib" => {
+                let documentation = filter_docs();
+                let payload = serde_json::json!({
+                    "doc_type": "filterlib",
+                    "document_name": "vcf-filter library",
+                    "content": documentation,
+                    "format": "markdown"
+                });
+                let content = Content::json(payload)?;
+                return self.create_result_with_logging(content, start_time);
             }
             "all" => {
                 let combined = format!(
@@ -779,7 +860,7 @@ impl VcfServer {
             unknown => {
                 return Err(McpError::invalid_params(
                     format!(
-                        "Unknown doc_type '{}'. Available: readme, streaming, filters, streaming-filters, all",
+                        "Unknown doc_type '{}'. Available: readme, streaming, filters, streaming-filters, filterlib, all",
                         unknown
                     ),
                     None,
@@ -861,22 +942,22 @@ fn build_chromosome_response(
 
 impl ServerHandler for VcfServer {
     fn get_info(&self) -> ServerInfo {
-        ServerInfo {
-            protocol_version: ProtocolVersion::V_2024_11_05,
-            capabilities: ServerCapabilities::builder()
+        ServerInfo::new(
+            ServerCapabilities::builder()
                 .enable_tools()
                 .enable_resources()
                 .build(),
-            server_info: Implementation::from_build_env(),
-            instructions: Some(
-                "This server provides VCF variant query tools (query_by_position, query_by_region, query_by_id, start_region_query, get_next_variant, close_query_session) and a metadata resource (vcf://metadata). For large regions, use streaming tools (start_region_query + get_next_variant) to fetch variants one at a time. IMPORTANT: Genomic coordinates are specific to the reference genome build (GRCh37 vs GRCh38). Always check the reference_genome field in responses.".to_string()
-            ),
-        }
+        )
+            .with_protocol_version(ProtocolVersion::V_2024_11_05)
+            .with_server_info(Implementation::from_build_env())
+            .with_instructions(
+                "This server provides VCF variant query tools (query_by_position, query_by_id, start_region_query, get_next_variant, close_query_session) and a metadata resource (vcf://metadata). For large regions, use streaming tools (start_region_query + get_next_variant) to fetch variants one at a time. IMPORTANT: Genomic coordinates are specific to the reference genome build (GRCh37 vs GRCh38). Always check the reference_genome field in responses.".to_string()
+            )
     }
 
     async fn list_resources(
         &self,
-        _request: Option<PaginatedRequestParam>,
+        _request: Option<PaginatedRequestParams>,
         _: RequestContext<RoleServer>,
     ) -> Result<ListResourcesResult, McpError> {
         Ok(ListResourcesResult {
@@ -902,7 +983,7 @@ impl ServerHandler for VcfServer {
 
     async fn read_resource(
         &self,
-        request: ReadResourceRequestParam,
+        request: ReadResourceRequestParams,
         _: RequestContext<RoleServer>,
     ) -> Result<ReadResourceResult, McpError> {
         if request.uri.as_str() == "vcf://metadata" {
@@ -912,14 +993,14 @@ impl ServerHandler for VcfServer {
                 McpError::internal_error(format!("Failed to serialize metadata: {}", e), None)
             })?;
 
-            Ok(ReadResourceResult {
-                contents: vec![ResourceContents::TextResourceContents {
+            Ok(ReadResourceResult::new(vec![
+                ResourceContents::TextResourceContents {
                     uri: request.uri.to_string(),
                     mime_type: Some("application/json".to_string()),
                     text: metadata_json,
                     meta: None,
-                }],
-            })
+                },
+            ]))
         } else {
             Err(McpError::resource_not_found(
                 format!("Resource not found: {}", request.uri),
@@ -930,7 +1011,7 @@ impl ServerHandler for VcfServer {
 
     async fn list_resource_templates(
         &self,
-        _request: Option<PaginatedRequestParam>,
+        _request: Option<PaginatedRequestParams>,
         _: RequestContext<RoleServer>,
     ) -> Result<ListResourceTemplatesResult, McpError> {
         Ok(ListResourceTemplatesResult {
@@ -942,7 +1023,7 @@ impl ServerHandler for VcfServer {
 
     async fn initialize(
         &self,
-        request: InitializeRequestParam,
+        request: InitializeRequestParams,
         _: RequestContext<RoleServer>,
     ) -> Result<InitializeResult, McpError> {
         if self.debug {
@@ -956,7 +1037,7 @@ impl ServerHandler for VcfServer {
 
     async fn list_tools(
         &self,
-        _request: Option<PaginatedRequestParam>,
+        _request: Option<PaginatedRequestParams>,
         _: RequestContext<RoleServer>,
     ) -> Result<ListToolsResult, McpError> {
         Ok(ListToolsResult {
@@ -968,7 +1049,7 @@ impl ServerHandler for VcfServer {
 
     async fn call_tool(
         &self,
-        request: CallToolRequestParam,
+        request: CallToolRequestParams,
         ctx: RequestContext<RoleServer>,
     ) -> Result<CallToolResult, McpError> {
         if self.debug {
@@ -981,10 +1062,10 @@ impl ServerHandler for VcfServer {
         let result = self.tool_router.call(tool_ctx).await;
 
         // Log errors in debug mode
-        if self.debug {
-            if let Err(ref e) = result {
-                eprintln!("[DEBUG] Tool call error: {:?}", e);
-            }
+        if self.debug
+            && let Err(ref e) = result
+        {
+            eprintln!("[DEBUG] Tool call error: {:?}", e);
         }
 
         result
@@ -1034,25 +1115,24 @@ async fn main() -> std::io::Result<()> {
 
 async fn run_sse_server(server: VcfServer, addr: &str) -> std::io::Result<()> {
     use axum::{
+        Router,
         extract::Request,
         middleware::{self, Next},
         response::Response,
-        Router,
     };
     use rmcp::transport::streamable_http_server::{
-        session::local::LocalSessionManager, StreamableHttpServerConfig, StreamableHttpService,
+        StreamableHttpServerConfig, StreamableHttpService, session::local::LocalSessionManager,
     };
 
     let bind_addr: std::net::SocketAddr = addr
         .parse()
         .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidInput, e))?;
 
-    let config = StreamableHttpServerConfig {
-        sse_keep_alive: Some(std::time::Duration::from_secs(15)),
-        sse_retry: Some(std::time::Duration::from_secs(5)),
-        stateful_mode: false,
-        cancellation_token: tokio_util::sync::CancellationToken::new(),
-    };
+    let config = StreamableHttpServerConfig::default()
+        .with_sse_keep_alive(Some(std::time::Duration::from_secs(15)))
+        .with_sse_retry(Some(std::time::Duration::from_secs(5)))
+        .with_stateful_mode(false)
+        .with_cancellation_token(tokio_util::sync::CancellationToken::new());
 
     let session_manager = Arc::new(LocalSessionManager::default());
 
@@ -1089,6 +1169,8 @@ async fn run_sse_server(server: VcfServer, addr: &str) -> std::io::Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::fs;
+    use vcf_filter::FilterEngine;
 
     fn create_test_index() -> VcfIndex {
         let vcf_path = PathBuf::from("sample_data/sample.compressed.vcf.gz");
@@ -1181,5 +1263,85 @@ mod tests {
         // Count header lines (all lines starting with #)
         let line_count = header_string.lines().filter(|l| l.starts_with('#')).count();
         assert!(line_count > 0, "Header should have at least one line");
+    }
+
+    #[test]
+    fn test_raw_row_filter_evaluation_matches_malformed_gt_input() {
+        let mut sample_fields = HashMap::new();
+        sample_fields.insert(
+            "GT".to_string(),
+            serde_json::Value::String("1/1".to_string()),
+        );
+
+        let mut samples = HashMap::new();
+        samples.insert("SAMPLE".to_string(), sample_fields);
+
+        let variant = Variant {
+            chromosome: "chr1".to_string(),
+            position: 977780,
+            id: "rs2710875".to_string(),
+            reference: "C".to_string(),
+            alternate: vec!["T".to_string()],
+            quality: None,
+            filter: vec![],
+            info: HashMap::new(),
+            samples,
+            raw_row: "chr1\t977780\trs2710875\tC\tT\t.\t.\t.\tGT\t/1/1".to_string(),
+        };
+
+        assert_eq!(
+            variant.raw_row,
+            "chr1\t977780\trs2710875\tC\tT\t.\t.\t.\tGT\t/1/1"
+        );
+    }
+
+    #[test]
+    fn test_filter_engine_with_rs2710875_one_row_vcf() {
+        use noodles::bgzf;
+        use std::io::Read;
+
+        let file = fs::File::open("sample_data/rs2710875test.vcf.gz")
+            .expect("Failed to open rs2710875test.vcf.gz");
+        let mut bgzf_reader = bgzf::io::Reader::new(file);
+        let mut content = String::new();
+        bgzf_reader
+            .read_to_string(&mut content)
+            .expect("Failed to decompress rs2710875test.vcf.gz");
+
+        let mut header_lines = Vec::new();
+        let mut data_row: Option<String> = None;
+
+        for line in content.lines() {
+            if line.starts_with('#') {
+                header_lines.push(line);
+            } else if !line.trim().is_empty() {
+                data_row = Some(line.to_string());
+                break;
+            }
+        }
+
+        let header = format!("{}\n", header_lines.join("\n"));
+        let row = data_row.expect("Expected exactly one data row in rs2710875test.vcf");
+
+        let filter_engine =
+            FilterEngine::new(&header).expect("Failed to create filter engine from test header");
+
+        assert!(
+            filter_engine
+                .evaluate("ID == \"rs2710875\"", &row)
+                .expect("ID filter should evaluate")
+        );
+
+        assert!(
+            filter_engine
+                .evaluate("GT == \"1/1\"", &row)
+                .expect("GT filter should evaluate")
+        );
+
+        assert!(
+            filter_engine
+                .evaluate("ID == \"rs2710875\" && GT == \"1/1\"", &row)
+                .expect("Combined ID/GT filter should evaluate")
+        );
     }
 }

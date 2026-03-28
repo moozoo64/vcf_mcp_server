@@ -9,7 +9,7 @@ The VCF MCP Server now supports **stateful streaming queries** that return varia
 
 ## Why Streaming?
 
-Traditional `query_by_region` returns all variants at once, which can be problematic for:
+Some query scenarios are problematic when returning all variants at once:
 - Large genomic regions (e.g., entire chromosomes)
 - Memory-constrained environments
 - Interactive LLM workflows where you want to process results incrementally
@@ -26,19 +26,21 @@ Streaming queries solve this by maintaining server-side session state and return
   "chromosome": "20",
   "start": 60000,
   "end": 70000,
-  "filter": "QUAL > 30 AND FILTER == PASS"  // Optional filter
+  "filter": "QUAL > 30 && FILTER == \"PASS\""  // Optional filter
 }
 
 // Response:
 {
-  "variant": {
-    "chromosome": "20",
-    "position": 60001,
-    "id": "rs123",
-    "ref": "A",
-    "alt": ["G"],
-    // ... full variant data
-  },
+  "variants": [
+    {
+      "chromosome": "20",
+      "position": 60001,
+      "id": "rs123",
+      "ref": "A",
+      "alt": ["G"]
+      // ... up to 5 variants
+    }
+  ],
   "session_id": "550e8400-e29b-41d4-a716-446655440000",
   "has_more": true,
   "reference_genome": "GRCh38",
@@ -58,12 +60,15 @@ Streaming queries solve this by maintaining server-side session state and return
 
 // Response:
 {
-  "variant": {
-    "chromosome": "20",
-    "position": 60150,
-    "id": "rs456",
-    // ...
-  },
+  "variants": [
+    {
+      "chromosome": "20",
+      "position": 60150,
+      "id": "rs456"
+      // ...
+    }
+    // ... up to 5 variants
+  ],
   "session_id": "550e8400-e29b-41d4-a716-446655440000",
   "has_more": true,
   "reference_genome": "GRCh38",
@@ -81,7 +86,7 @@ Streaming queries solve this by maintaining server-side session state and return
 
 // Response:
 {
-  "variant": null,
+  "variants": [],
   "session_id": null,
   "has_more": false,
   "reference_genome": "GRCh38",
@@ -99,17 +104,17 @@ Start a new streaming query session for a genomic region.
 - `chromosome` (string): Chromosome name (e.g., "1", "chr1", "X")
 - `start` (u64): Start position (1-based, inclusive)
 - `end` (u64): End position (1-based, inclusive)
-- `filter` (string, optional): Filter expression (e.g., "QUAL > 30 AND FILTER == PASS"). Empty/omitted = no filtering. See [FILTER_EXAMPLES.md](FILTER_EXAMPLES.md) for syntax.
+- `filter` (string, optional): Filter expression (e.g., "QUAL > 30 && FILTER == \"PASS\""). Empty/omitted = no filtering. See [FILTER_EXAMPLES.md](FILTER_EXAMPLES.md) for syntax.
 
 **Returns:**
-- `variant`: First variant in region matching filter (or null if none found)
-- `session_id`: UUID for subsequent calls (or null if no variants)
+- `variants`: Array of up to 5 variants matching filter (empty array if none found)
+- `session_id`: UUID for subsequent calls (or null if no more variants)
 - `has_more`: Whether more variants exist
 - `reference_genome`: Genome build (GRCh37/GRCh38/etc.)
 - `matched_chromosome`: Actual chromosome name used
 
 **Errors:**
-- Chromosome not found → suggests alternate names (chr1 ↔ 1)
+- Chromosome not found → returns an error
 - No variants match filter → descriptive error message
 
 ### `get_next_variant`
@@ -120,7 +125,7 @@ Get the next variant from an active session.
 - `session_id` (string): Session ID from `start_region_query` or previous `get_next_variant`
 
 **Returns:**
-- `variant`: Next variant (or null if exhausted)
+- `variants`: Array of up to 5 variants (empty array if exhausted)
 - `session_id`: Same ID (or null if exhausted)
 - `has_more`: Whether more variants exist
 - `reference_genome`: Genome build
@@ -158,20 +163,20 @@ const init = await start_region_query({
   end: 2000000
 });
 
-// Process first variant
-if (init.variant) {
-  processVariant(init.variant);
+// Process first batch (up to 5 variants)
+for (const v of init.variants) {
+  processVariant(v);
 }
 
-// Get remaining variants one by one
+// Get remaining batches
 let session_id = init.session_id;
 while (session_id) {
   const next = await get_next_variant({ session_id });
-  
-  if (next.variant) {
-    processVariant(next.variant);
+
+  for (const v of next.variants) {
+    processVariant(v);
   }
-  
+
   // Update session_id (becomes null when done)
   session_id = next.session_id;
 }
@@ -190,11 +195,12 @@ const pathogenic = [];
 let current = session;
 
 while (current.session_id && pathogenic.length < 5) {
-  if (current.variant && isPathogenic(current.variant)) {
-    pathogenic.push(current.variant);
+  for (const v of current.variants) {
+    if (isPathogenic(v)) pathogenic.push(v);
+    if (pathogenic.length >= 5) break;
   }
-  
-  if (current.has_more) {
+
+  if (current.has_more && pathogenic.length < 5) {
     current = await get_next_variant({ session_id: current.session_id });
   } else {
     break;
@@ -216,11 +222,11 @@ const result = await start_region_query({
   start: 1000,
   end: 2000
 });
-// Error: "Chromosome 'chr1' not found. Try '1'?"
+// Error: "Chromosome 'chr1' not found in VCF file"
 
-// Retry with suggestion
+// Retry with alternate naming convention
 const retry = await start_region_query({
-  chromosome: "1",  // Use suggested name
+  chromosome: "1",
   start: 1000,
   end: 2000
 });
@@ -265,19 +271,8 @@ Each session stores:
 - Memory-constrained environments
 
 **Not ideal for:**
-- Small regions (<100 variants) → use `query_by_region`
-- Batch processing where you need all variants → use `query_by_region`
-
-## Comparison: Streaming vs Batch Queries
-
-| Feature | `query_by_region` | Streaming (`start_region_query` + `get_next_variant`) |
-|---------|-------------------|-------------------------------------------------------|
-| Return type | All variants at once | One variant per call |
-| Memory usage | O(n) variants | O(1) per session |
-| Total API calls | 1 | k + 1 (k = variant count) |
-| Can stop early | No | Yes |
-| Session management | Stateless | Stateful (5 min timeout) |
-| Best for | Small regions | Large regions, incremental processing |
+- Scenarios where you need all variants at once for a single-pass analysis
+- Simple queries returning fewer than ~100 variants (adds API round-trips)
 
 ## Claude Desktop Integration
 
@@ -316,10 +311,10 @@ Sessions stored in `Arc<Mutex<HashMap<String, QuerySession>>>`:
 
 ### Error Handling
 
-- **Chromosome not found**: Returns suggestions (chr1 ↔ 1)
+- **Chromosome not found**: Retry with alternate naming convention (`chr1` ↔ `1`)
 - **Session not found**: Prompt to start new query
 - **Session expired**: Auto-remove after 5 minutes
-- **No variants**: Returns `variant: null` immediately
+- **No variants**: Returns `variants: []` immediately
 
 ## Limitations
 
@@ -328,7 +323,7 @@ Sessions stored in `Arc<Mutex<HashMap<String, QuerySession>>>`:
 3. **No backward iteration** (can't go to previous variants)
 4. **No random access** (can't jump to arbitrary positions within session)
 
-For these use cases, use the batch `query_by_region` tool instead.
+For these use cases, use `query_by_position` or `query_by_id` instead.
 
 ## Security Considerations
 

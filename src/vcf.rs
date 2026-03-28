@@ -38,6 +38,9 @@ pub struct Variant {
     pub quality: Option<f32>,
     pub filter: Vec<String>,
     pub info: HashMap<String, serde_json::Value>,
+    /// Per-sample genotype data: sample_name -> { field_name -> value }
+    /// e.g., {"NA00001": {"GT": "0|0", "GQ": 48, "DP": 1}}
+    pub samples: HashMap<String, HashMap<String, serde_json::Value>>,
     #[serde(skip_serializing)]
     pub raw_row: String,
 }
@@ -243,7 +246,20 @@ impl VcfIndex {
                         *position,
                     ),
                 };
-                results.extend(variants);
+                results.extend(
+                    variants
+                        .into_iter()
+                        .filter(|variant| {
+                            if variant.id == id {
+                                true
+                            } else if variant.id == "." {
+                                false
+                            } else {
+                                variant.id.split(';').any(|entry| entry == id)
+                            }
+                        })
+                        .collect::<Vec<_>>(),
+                );
             }
 
             results
@@ -354,18 +370,16 @@ fn infer_genome_build_from_contigs(header: &vcf::Header) -> Option<String> {
 
     // Try both "chr1" and "1" naming conventions
     for chr_name in ["chr1", "1"] {
-        if let Some(contig) = header.contigs().get(chr_name) {
-            if let Some(length) = contig.length() {
-                let diff_grch37 =
-                    (length as i64 - CHR1_GRCH37_LENGTH as i64).unsigned_abs() as usize;
-                let diff_grch38 =
-                    (length as i64 - CHR1_GRCH38_LENGTH as i64).unsigned_abs() as usize;
+        if let Some(contig) = header.contigs().get(chr_name)
+            && let Some(length) = contig.length()
+        {
+            let diff_grch37 = (length as i64 - CHR1_GRCH37_LENGTH as i64).unsigned_abs() as usize;
+            let diff_grch38 = (length as i64 - CHR1_GRCH38_LENGTH as i64).unsigned_abs() as usize;
 
-                if diff_grch37 < TOLERANCE {
-                    return Some("GRCh37".to_string());
-                } else if diff_grch38 < TOLERANCE {
-                    return Some("GRCh38".to_string());
-                }
+            if diff_grch37 < TOLERANCE {
+                return Some("GRCh37".to_string());
+            } else if diff_grch38 < TOLERANCE {
+                return Some("GRCh38".to_string());
             }
         }
     }
@@ -380,13 +394,13 @@ fn extract_reference_genome(header: &vcf::Header) -> ReferenceGenomeInfo {
     // Try to get ##reference line from header
     // Collection can be Unstructured (Vec<String>) or Structured (IndexMap)
     // ##reference is typically unstructured with a single string value
-    if let Some(Collection::Unstructured(values)) = header.get("reference") {
-        if let Some(reference_value) = values.first() {
-            return ReferenceGenomeInfo {
-                build: reference_value.clone(),
-                source: ReferenceGenomeSource::HeaderLine,
-            };
-        }
+    if let Some(Collection::Unstructured(values)) = header.get("reference")
+        && let Some(reference_value) = values.first()
+    {
+        return ReferenceGenomeInfo {
+            build: reference_value.clone(),
+            source: ReferenceGenomeSource::HeaderLine,
+        };
     }
 
     // Fall back to inferring from contig lengths
@@ -451,19 +465,18 @@ fn convert_info_value(debug_str: &str) -> serde_json::Value {
     }
 
     // Match Integer(value)
-    if let Some(inner) = s.strip_prefix("Integer(").and_then(|s| s.strip_suffix(')')) {
-        if let Ok(num) = inner.parse::<i64>() {
-            return serde_json::Value::Number(num.into());
-        }
+    if let Some(inner) = s.strip_prefix("Integer(").and_then(|s| s.strip_suffix(')'))
+        && let Ok(num) = inner.parse::<i64>()
+    {
+        return serde_json::Value::Number(num.into());
     }
 
     // Match Float(value)
-    if let Some(inner) = s.strip_prefix("Float(").and_then(|s| s.strip_suffix(')')) {
-        if let Ok(num) = inner.parse::<f64>() {
-            if let Some(json_num) = serde_json::Number::from_f64(num) {
-                return serde_json::Value::Number(json_num);
-            }
-        }
+    if let Some(inner) = s.strip_prefix("Float(").and_then(|s| s.strip_suffix(')'))
+        && let Ok(num) = inner.parse::<f64>()
+        && let Some(json_num) = serde_json::Number::from_f64(num)
+    {
+        return serde_json::Value::Number(json_num);
     }
 
     // Match Character(value)
@@ -495,10 +508,10 @@ fn convert_info_value(debug_str: &str) -> serde_json::Value {
                     if let Ok(num) = val_str.parse::<i64>() {
                         return Some(serde_json::Value::Number(num.into()));
                     }
-                    if let Ok(num) = val_str.parse::<f64>() {
-                        if let Some(json_num) = serde_json::Number::from_f64(num) {
-                            return Some(serde_json::Value::Number(json_num));
-                        }
+                    if let Ok(num) = val_str.parse::<f64>()
+                        && let Some(json_num) = serde_json::Number::from_f64(num)
+                    {
+                        return Some(serde_json::Value::Number(json_num));
                     }
                     return Some(serde_json::Value::String(val_str.to_string()));
                 }
@@ -527,6 +540,16 @@ fn parse_variant_record(record: &vcf::Record, header: &vcf::Header) -> std::io::
         .trim_end()
         .to_string();
 
+    let samples = parse_samples(record, header);
+    let normalized_raw_row = normalize_raw_row_samples(&raw_row_string, header, &samples);
+
+    let ids: Vec<String> = record
+        .ids()
+        .iter()
+        .map(|id| id.to_string())
+        .filter(|id| id != ".")
+        .collect();
+
     Ok(Variant {
         chromosome: record.reference_sequence_name().to_string(),
         position: usize::from(
@@ -538,7 +561,11 @@ fn parse_variant_record(record: &vcf::Record, header: &vcf::Header) -> std::io::
                     std::io::Error::new(std::io::ErrorKind::InvalidData, "Missing position")
                 })?,
         ) as u64,
-        id: record.ids().iter().next().unwrap_or(".").to_string(),
+        id: if ids.is_empty() {
+            ".".to_string()
+        } else {
+            ids.join(";")
+        },
         reference: record.reference_bases().to_string(),
         alternate: record
             .alternate_bases()
@@ -575,8 +602,187 @@ fn parse_variant_record(record: &vcf::Record, header: &vcf::Header) -> std::io::
             })
             .filter_map(|item| item.ok())
             .collect(),
-        raw_row: raw_row_string,
+        samples,
+        raw_row: normalized_raw_row,
     })
+}
+
+fn normalize_raw_row_samples(
+    raw_row: &str,
+    header: &vcf::Header,
+    samples: &HashMap<String, HashMap<String, serde_json::Value>>,
+) -> String {
+    let mut fields: Vec<String> = raw_row.split('\t').map(|s| s.to_string()).collect();
+    if fields.len() < 10 {
+        return raw_row.to_string();
+    }
+
+    let format_keys: Vec<String> = fields[8].split(':').map(|s| s.to_string()).collect();
+    if format_keys.is_empty() {
+        return raw_row.to_string();
+    }
+
+    let sample_names: Vec<String> = header
+        .sample_names()
+        .iter()
+        .map(|name| name.to_string())
+        .collect();
+
+    for (sample_idx, sample_name) in sample_names.iter().enumerate() {
+        let col_idx = 9 + sample_idx;
+        if col_idx >= fields.len() {
+            break;
+        }
+
+        let Some(sample_values) = samples.get(sample_name) else {
+            continue;
+        };
+
+        let rebuilt = format_keys
+            .iter()
+            .map(|key| {
+                sample_values
+                    .get(key)
+                    .map(format_sample_value)
+                    .unwrap_or_else(|| ".".to_string())
+            })
+            .collect::<Vec<_>>()
+            .join(":");
+
+        fields[col_idx] = rebuilt;
+    }
+
+    fields.join("\t")
+}
+
+fn format_sample_value(value: &serde_json::Value) -> String {
+    match value {
+        serde_json::Value::Null => ".".to_string(),
+        serde_json::Value::Bool(flag) => {
+            if *flag {
+                "1".to_string()
+            } else {
+                "0".to_string()
+            }
+        }
+        serde_json::Value::Number(n) => n.to_string(),
+        serde_json::Value::String(s) => s.clone(),
+        serde_json::Value::Array(items) => items
+            .iter()
+            .map(format_sample_value)
+            .collect::<Vec<_>>()
+            .join(","),
+        serde_json::Value::Object(_) => value.to_string(),
+    }
+}
+
+// Helper function to parse per-sample genotype data from a VCF record
+fn parse_samples(
+    record: &vcf::Record,
+    header: &vcf::Header,
+) -> HashMap<String, HashMap<String, serde_json::Value>> {
+    let mut result = HashMap::new();
+    let sample_names: Vec<String> = header
+        .sample_names()
+        .iter()
+        .map(|s| s.to_string())
+        .collect();
+
+    for (idx, sample) in record.samples().iter().enumerate() {
+        let sample_name = sample_names
+            .get(idx)
+            .cloned()
+            .unwrap_or_else(|| format!("sample_{}", idx));
+        let mut sample_data = HashMap::new();
+
+        for (key, value_opt) in sample.iter(header).flatten() {
+            let json_value = match value_opt {
+                Some(value) => {
+                    let debug_str = format!("{:?}", value);
+                    convert_sample_value(&debug_str)
+                }
+                None => serde_json::Value::Null,
+            };
+            sample_data.insert(key.to_string(), json_value);
+        }
+
+        if !sample_data.is_empty() {
+            result.insert(sample_name, sample_data);
+        }
+    }
+
+    result
+}
+
+// Helper function to convert debug-formatted sample values to JSON
+fn convert_sample_value(debug_str: &str) -> serde_json::Value {
+    let s = debug_str;
+
+    // Match Genotype pattern: Genotype(Genotype("0|0"))
+    if s.starts_with("Genotype(Genotype(\"")
+        && let Some(inner) = s
+            .strip_prefix("Genotype(Genotype(\"")
+            .and_then(|s| s.strip_suffix("\"))"))
+    {
+        return serde_json::Value::String(inner.to_string());
+    }
+
+    // Match Integer(value)
+    if let Some(inner) = s.strip_prefix("Integer(").and_then(|s| s.strip_suffix(')'))
+        && let Ok(num) = inner.parse::<i64>()
+    {
+        return serde_json::Value::Number(num.into());
+    }
+
+    // Match Float(value)
+    if let Some(inner) = s.strip_prefix("Float(").and_then(|s| s.strip_suffix(')'))
+        && let Ok(num) = inner.parse::<f64>()
+        && let Some(json_num) = serde_json::Number::from_f64(num)
+    {
+        return serde_json::Value::Number(json_num);
+    }
+
+    // Match String("value")
+    if let Some(inner) = s
+        .strip_prefix("String(\"")
+        .and_then(|s| s.strip_suffix("\")"))
+    {
+        return serde_json::Value::String(inner.to_string());
+    }
+
+    // Match Array([...]) - for HQ and similar fields with Ok(Some(value)) or Ok(None) pattern
+    if let Some(inner) = s.strip_prefix("Array([").and_then(|s| s.strip_suffix("])")) {
+        let values: Vec<serde_json::Value> = inner
+            .split("), ")
+            .map(|part| {
+                let part = part.trim().trim_end_matches(')');
+                // Handle Ok(Some(n)) pattern (raw integer)
+                if let Some(val_str) = part.strip_prefix("Ok(Some(") {
+                    // Try to parse as integer
+                    if let Ok(num) = val_str.parse::<i64>() {
+                        return serde_json::Value::Number(num.into());
+                    }
+                    // Try to parse as float
+                    if let Ok(num) = val_str.parse::<f64>()
+                        && let Some(json_num) = serde_json::Number::from_f64(num)
+                    {
+                        return serde_json::Value::Number(json_num);
+                    }
+                    // Return as string
+                    return serde_json::Value::String(val_str.to_string());
+                }
+                // Handle Ok(None) pattern
+                if part.contains("Ok(None") {
+                    return serde_json::Value::Null;
+                }
+                serde_json::Value::Null
+            })
+            .collect();
+        return serde_json::Value::Array(values);
+    }
+
+    // Fall back to string
+    serde_json::Value::String(s.to_string())
 }
 
 // Helper function to save ID index to disk
@@ -601,7 +807,7 @@ fn save_statistics_to_disk(
 
     // Serialize and write to temp file
     {
-        let encoded = bincode::serialize(statistics)
+        let encoded = serde_json::to_vec(statistics)
             .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))?;
         let mut tmp_file = fs::File::create(&tmp_path)?;
         tmp_file.write_all(&encoded)?;
@@ -637,7 +843,7 @@ fn load_statistics_from_disk(stats_path: &PathBuf, debug: bool) -> std::io::Resu
     let mut buffer = Vec::new();
     file.read_to_end(&mut buffer)?;
 
-    let statistics: VcfStatistics = bincode::deserialize(&buffer)
+    let statistics: VcfStatistics = serde_json::from_slice(&buffer)
         .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))?;
 
     Ok(statistics)
@@ -819,7 +1025,7 @@ fn save_id_index_to_disk(
 
     // Serialize and write to temp file
     {
-        let encoded = bincode::serialize(id_index)
+        let encoded = serde_json::to_vec(id_index)
             .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))?;
         let mut tmp_file = fs::File::create(&tmp_path)?;
         tmp_file.write_all(&encoded)?;
@@ -858,7 +1064,7 @@ fn load_id_index_from_disk(
     let mut buffer = Vec::new();
     file.read_to_end(&mut buffer)?;
 
-    let id_index: HashMap<String, Vec<(String, u64)>> = bincode::deserialize(&buffer)
+    let id_index: HashMap<String, Vec<(String, u64)>> = serde_json::from_slice(&buffer)
         .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))?;
 
     Ok(id_index)
@@ -883,10 +1089,14 @@ fn build_id_index(
     let mut count = 0;
     for record in reader.records().flatten() {
         if let Ok(variant) = parse_variant_record(&record, header) {
-            // Skip "." (missing ID)
-            if variant.id != "." {
+            // Index all IDs from the record (semicolon-delimited in variant.id)
+            for id in variant
+                .id
+                .split(';')
+                .filter(|id| !id.is_empty() && *id != ".")
+            {
                 id_index
-                    .entry(variant.id.clone())
+                    .entry(id.to_string())
                     .or_default()
                     .push((variant.chromosome.clone(), variant.position));
             }
@@ -909,24 +1119,24 @@ fn build_id_index(
 
 // Load and index VCF file
 pub fn load_vcf(path: &PathBuf, debug: bool, save_index: bool) -> std::io::Result<VcfIndex> {
-    // Check for existing indices: TBI first (for compatibility), then CSI
+    // Check for existing indices: CSI first (supports larger contigs), then TBI
     let csi_path = PathBuf::from(format!("{}.csi", path.display()));
     let tbi_path = PathBuf::from(format!("{}.tbi", path.display()));
 
-    let genomic_index = if tbi_path.exists() {
-        // Use existing tabix index (prefer TBI if it exists for compatibility)
-        if debug {
-            eprintln!("Found tabix index: {}", tbi_path.display());
-        }
-        eprintln!("Loading VCF file with existing tabix index...");
-        GenomicIndex::Tabix(tabix::fs::read(&tbi_path)?)
-    } else if csi_path.exists() {
+    let genomic_index = if csi_path.exists() {
         // Use existing CSI index
         if debug {
             eprintln!("Found CSI index: {}", csi_path.display());
         }
         eprintln!("Loading VCF file with existing CSI index...");
         GenomicIndex::Csi(csi::fs::read(&csi_path)?)
+    } else if tbi_path.exists() {
+        // Use existing tabix index
+        if debug {
+            eprintln!("Found tabix index: {}", tbi_path.display());
+        }
+        eprintln!("Loading VCF file with existing tabix index...");
+        GenomicIndex::Tabix(tabix::fs::read(&tbi_path)?)
     } else {
         // Build tabix index on the fly (fallback - CSI requires external bcftools)
         eprintln!("No index found. Building tabix index...");

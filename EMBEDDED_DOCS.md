@@ -1,6 +1,8 @@
 # Embedded Documentation Tool
 
-The VCF MCP Server now includes a `get_documentation` tool that provides access to all documentation embedded in the binary.
+The VCF MCP Server includes a `get_documentation` tool that provides access to project documentation embedded in the binary, plus `filterlib` documentation exposed by the upstream `vcf-filter` library.
+
+For `doc_type: "filterlib"`, content is returned directly from `vcf_filter::docs()` at runtime.
 
 ## Available Documentation
 
@@ -10,6 +12,7 @@ The VCF MCP Server now includes a `get_documentation` tool that provides access 
 | `streaming` | Streaming query guide | STREAMING.md |
 | `filters` | Filter syntax and examples | FILTER_EXAMPLES.md |
 | `streaming-filters` | Streaming with filter examples | STREAMING_FILTER_EXAMPLES.md |
+| `filterlib` | vcf-filter library syntax and operators | vcf-filter library (runtime) |
 | `all` | Complete documentation (all above combined) | Combined |
 
 ## Usage
@@ -49,7 +52,7 @@ const result = await get_documentation({
 });
 
 console.log(result.content); // FILTER_EXAMPLES.md content
-// Learn filter syntax: QUAL > 30, FILTER == PASS, etc.
+// Learn filter syntax: QUAL > 30, FILTER == "PASS", etc.
 ```
 
 ### Get Streaming + Filters Guide
@@ -61,6 +64,23 @@ const result = await get_documentation({
 
 console.log(result.content); // STREAMING_FILTER_EXAMPLES.md content
 // Learn how to use filters with streaming queries
+```
+
+### Get Filter Library Documentation
+
+```javascript
+const result = await get_documentation({
+  doc_type: "filterlib"
+});
+
+console.log(result.content); // vcf-filter library documentation
+// Learn filter syntax, operators, annotation access, and API reference
+// {  
+//   "doc_type": "filterlib",
+//   "document_name": "vcf-filter library",
+//   "content": "# VCF Filter\n\nA high-performance Rust library...",
+//   "format": "markdown"
+// }
 ```
 
 ### Get Complete Documentation
@@ -122,7 +142,7 @@ try {
 } catch (error) {
   console.error(error);
   // Error: Unknown doc_type 'invalid-type'. 
-  // Available: readme, streaming, filters, streaming-filters, all
+  // Available: readme, streaming, filters, streaming-filters, filterlib, all
 }
 ```
 
@@ -174,6 +194,10 @@ The `all` type also includes:
 // Claude encounters an error about filters
 const filterDocs = await get_documentation({doc_type: "filters"});
 // Claude reads the docs and corrects its approach
+
+// Need detailed filter syntax and operators?
+const filterLibDocs = await get_documentation({doc_type: "filterlib"});
+// Get comprehensive filter library documentation
 ```
 
 ### 2. Interactive Tutorial

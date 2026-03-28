@@ -32,7 +32,7 @@ This file contains a subset (first 1000 lines) of high-coverage Illumina sequenc
 
 **Files:**
 - `arabidopsis_thaliana_chr1_subset.vcf.gz`
-- `arabidopsis_thaliana_chr1_subset.vcf.gz.tbi`
+- `arabidopsis_thaliana_chr1_subset.vcf.gz.tbi` (generated on demand, may not be committed)
 - `download_arabidopsis_sample.sh`
 
 **Source:** 1001 Genomes Project for Arabidopsis thaliana (https://1001genomes.org/)
