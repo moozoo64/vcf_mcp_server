@@ -10,6 +10,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Changed
 - `query_by_id` now accepts a comma-separated list of variant IDs and/or `chrom:pos` coordinates (e.g., `'rs1234,chr11:46352,rs46352,chr2:74635'`). Entries with a `:` are treated as `chromosome:position` lookups; all others are looked up by variant ID. Returns a flat, deduplicated list of all matching variants. Response field renamed from `query.id` to `query.ids` (array).
 
+## [0.2.3] - 2026
+
+### Changed
+- Replaced `bincode`-backed `.idx` and `.stats` cache persistence with `serde_json` for easier inspection and better version resilience
+- Updated code paths and docs to match the current `rmcp` 1.3 / `noodles` 0.109 behavior
+- Refreshed release documentation for the new package version
+
 ## [0.2.2] - 2026
 
 ### Changed
@@ -147,6 +154,7 @@ Key changes:
 - Access embedded docs via `get_documentation` tool
 
 [0.2.0-fork]: https://github.com/jda/vcf_mcp_server/compare/v0.1.0...develop
+[0.2.3]: https://github.com/jda/vcf_mcp_server/compare/v0.2.2...develop
 [0.2.2]: https://github.com/jda/vcf_mcp_server/compare/v0.2.1...develop
 [0.2.1]: https://github.com/jda/vcf_mcp_server/compare/v0.2.0-fork...develop
 [0.1.0]: https://github.com/jda/vcf_mcp_server/releases/tag/v0.1.0

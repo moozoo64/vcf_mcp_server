@@ -807,7 +807,7 @@ fn save_statistics_to_disk(
 
     // Serialize and write to temp file
     {
-        let encoded = bincode::serialize(statistics)
+        let encoded = serde_json::to_vec(statistics)
             .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))?;
         let mut tmp_file = fs::File::create(&tmp_path)?;
         tmp_file.write_all(&encoded)?;
@@ -843,7 +843,7 @@ fn load_statistics_from_disk(stats_path: &PathBuf, debug: bool) -> std::io::Resu
     let mut buffer = Vec::new();
     file.read_to_end(&mut buffer)?;
 
-    let statistics: VcfStatistics = bincode::deserialize(&buffer)
+    let statistics: VcfStatistics = serde_json::from_slice(&buffer)
         .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))?;
 
     Ok(statistics)
@@ -1025,7 +1025,7 @@ fn save_id_index_to_disk(
 
     // Serialize and write to temp file
     {
-        let encoded = bincode::serialize(id_index)
+        let encoded = serde_json::to_vec(id_index)
             .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))?;
         let mut tmp_file = fs::File::create(&tmp_path)?;
         tmp_file.write_all(&encoded)?;
@@ -1064,7 +1064,7 @@ fn load_id_index_from_disk(
     let mut buffer = Vec::new();
     file.read_to_end(&mut buffer)?;
 
-    let id_index: HashMap<String, Vec<(String, u64)>> = bincode::deserialize(&buffer)
+    let id_index: HashMap<String, Vec<(String, u64)>> = serde_json::from_slice(&buffer)
         .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))?;
 
     Ok(id_index)

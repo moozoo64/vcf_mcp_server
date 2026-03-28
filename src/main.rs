@@ -942,17 +942,17 @@ fn build_chromosome_response(
 
 impl ServerHandler for VcfServer {
     fn get_info(&self) -> ServerInfo {
-        ServerInfo {
-            protocol_version: ProtocolVersion::V_2024_11_05,
-            capabilities: ServerCapabilities::builder()
+        ServerInfo::new(
+            ServerCapabilities::builder()
                 .enable_tools()
                 .enable_resources()
                 .build(),
-            server_info: Implementation::from_build_env(),
-            instructions: Some(
+        )
+            .with_protocol_version(ProtocolVersion::V_2024_11_05)
+            .with_server_info(Implementation::from_build_env())
+            .with_instructions(
                 "This server provides VCF variant query tools (query_by_position, query_by_id, start_region_query, get_next_variant, close_query_session) and a metadata resource (vcf://metadata). For large regions, use streaming tools (start_region_query + get_next_variant) to fetch variants one at a time. IMPORTANT: Genomic coordinates are specific to the reference genome build (GRCh37 vs GRCh38). Always check the reference_genome field in responses.".to_string()
-            ),
-        }
+            )
     }
 
     async fn list_resources(
@@ -993,14 +993,14 @@ impl ServerHandler for VcfServer {
                 McpError::internal_error(format!("Failed to serialize metadata: {}", e), None)
             })?;
 
-            Ok(ReadResourceResult {
-                contents: vec![ResourceContents::TextResourceContents {
+            Ok(ReadResourceResult::new(vec![
+                ResourceContents::TextResourceContents {
                     uri: request.uri.to_string(),
                     mime_type: Some("application/json".to_string()),
                     text: metadata_json,
                     meta: None,
-                }],
-            })
+                },
+            ]))
         } else {
             Err(McpError::resource_not_found(
                 format!("Resource not found: {}", request.uri),
@@ -1128,12 +1128,11 @@ async fn run_sse_server(server: VcfServer, addr: &str) -> std::io::Result<()> {
         .parse()
         .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidInput, e))?;
 
-    let config = StreamableHttpServerConfig {
-        sse_keep_alive: Some(std::time::Duration::from_secs(15)),
-        sse_retry: Some(std::time::Duration::from_secs(5)),
-        stateful_mode: false,
-        cancellation_token: tokio_util::sync::CancellationToken::new(),
-    };
+    let config = StreamableHttpServerConfig::default()
+        .with_sse_keep_alive(Some(std::time::Duration::from_secs(15)))
+        .with_sse_retry(Some(std::time::Duration::from_secs(5)))
+        .with_stateful_mode(false)
+        .with_cancellation_token(tokio_util::sync::CancellationToken::new());
 
     let session_manager = Arc::new(LocalSessionManager::default());
 

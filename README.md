@@ -6,7 +6,7 @@
 
 _Original disclaimer: No warranty express or implied. This was totally vibe-coded while chronicly sleep-deprived and watching Bluey and Tremors 5._ Use at your own risk. AFAICT it works and outputs line up with what I get through traditional tools.
 
-**Current Version**: 0.2.1 | [Changelog](CHANGELOG.md)
+**Current Version**: 0.2.3 | [Changelog](CHANGELOG.md)
 
 ---
 
@@ -310,6 +310,8 @@ If not, you can create them using the following commands:
    ```
 
 The server will automatically detect and use `.csi` or `.tbi` index files if present, or build an in-memory tabix index. The index will be saved alongside your VCF file if it doesn't already exist and `--never-save-index` was not used.
+
+For faster startup, the server also maintains derived `.idx` and `.stats` cache files next to the VCF for ID lookups and precomputed statistics. These caches are stored as JSON so they are easier to inspect and safer to evolve across releases. Older cache files are treated as disposable derived artifacts and will be rebuilt automatically if they cannot be read.
 
 ### Uncompressed VCF Files
 
