@@ -705,7 +705,7 @@ fn test_same_position_pagination_regression() {
         "chr6 should be found in the repro VCF"
     );
     assert!(
-        all_variants.len() >= BATCH_SIZE + 1,
+        all_variants.len() > BATCH_SIZE,
         "Region must contain more than one page of variants to exercise the bug"
     );
 
