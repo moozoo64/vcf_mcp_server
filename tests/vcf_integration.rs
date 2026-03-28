@@ -658,6 +658,113 @@ fn test_query_with_start_greater_than_end() {
     assert_eq!(variants.len(), 0, "Inverted range should return no results");
 }
 
+// ============================================================================
+// Pagination / Same-Position Regression Tests
+// ============================================================================
+
+/// Regression test for the bug where variants sharing the same genomic position
+/// were skipped when a page boundary fell within that group.
+///
+/// The buggy implementation used `last_pos + 1` as the start of the next page
+/// query, which skipped all remaining variants at `last_pos`.
+///
+/// The fix queries from `last_pos` and uses a skip count to skip already-sent
+/// variants at that position.
+///
+/// Data file: sample_data/same-position-pagination-repro.vcf.gz
+///   Region chr6:32600177-32600210 has 6 variants:
+///     32600177, 32600184, 32600196, 32600203, 32600209 (rs9469799),
+///     32600209 (rs148033247), 32600210 (rs13202497)
+///   With page size 5, page 1 ends on the first rs9469799 at 32600209.
+///   Page 2 must include rs148033247 (second variant at 32600209) and
+///   rs13202497 at 32600210.
+#[test]
+fn test_same_position_pagination_regression() {
+    let vcf_path = PathBuf::from("sample_data/same-position-pagination-repro.vcf.gz");
+    if !vcf_path.exists() {
+        eprintln!("Warning: same-position-pagination-repro.vcf.gz not found, skipping test");
+        return;
+    }
+
+    let index = load_vcf(&vcf_path, false, false).expect("Failed to load repro VCF");
+
+    // 1. query_by_position at 32600209 must return 2 records.
+    let (pos_results, _) = index.query_by_position("chr6", 32600209);
+    assert_eq!(
+        pos_results.len(),
+        2,
+        "query_by_position(chr6, 32600209) should return 2 records"
+    );
+
+    // 2. Simulate page 1: region query, take 5 (BATCH_SIZE).
+    const BATCH_SIZE: usize = 5;
+    let (all_variants, matched_chr) = index.query_by_region("chr6", 32600177, 32600210);
+    assert_eq!(
+        matched_chr.as_deref(),
+        Some("chr6"),
+        "chr6 should be found in the repro VCF"
+    );
+    assert!(
+        all_variants.len() >= BATCH_SIZE + 1,
+        "Region must contain more than one page of variants to exercise the bug"
+    );
+
+    let page1: Vec<_> = all_variants.iter().take(BATCH_SIZE).collect();
+    assert_eq!(page1.len(), BATCH_SIZE);
+
+    let last_pos = page1.last().unwrap().position;
+    assert_eq!(
+        last_pos, 32600209,
+        "Page 1 should end on a 32600209 variant"
+    );
+
+    // Count how many variants at last_pos are already included in page 1.
+    let skip_count = page1.iter().filter(|v| v.position == last_pos).count();
+
+    // 3. Demonstrate the old (buggy) behaviour: querying from last_pos + 1
+    //    returns only 1 result (rs13202497), dropping the second 32600209 variant.
+    let (buggy_page2, _) = index.query_by_region("chr6", last_pos + 1, 32600210);
+    assert_eq!(
+        buggy_page2.len(),
+        1,
+        "Buggy resume (last_pos+1) incorrectly returns only 1 variant"
+    );
+    assert_eq!(
+        buggy_page2[0].id, "rs13202497",
+        "Buggy page 2 contains only rs13202497"
+    );
+
+    // 4. Correct behaviour: query from last_pos and skip already-sent variants.
+    let (resume_variants, _) = index.query_by_region("chr6", last_pos, 32600210);
+    let page2: Vec<_> = resume_variants
+        .iter()
+        .skip(skip_count)
+        .take(BATCH_SIZE)
+        .collect();
+
+    assert_eq!(
+        page2.len(),
+        2,
+        "Correct page 2 should contain 2 variants (rs148033247 and rs13202497)"
+    );
+    assert_eq!(
+        page2[0].id, "rs148033247",
+        "First variant on page 2 should be rs148033247 at 32600209"
+    );
+    assert_eq!(
+        page2[0].position, 32600209,
+        "rs148033247 should be at position 32600209"
+    );
+    assert_eq!(
+        page2[1].id, "rs13202497",
+        "Second variant on page 2 should be rs13202497"
+    );
+    assert_eq!(
+        page2[1].position, 32600210,
+        "rs13202497 should be at position 32600210"
+    );
+}
+
 #[test]
 fn test_query_nonexistent_variant_id() {
     let vcf_path = PathBuf::from("sample_data/sample.compressed.vcf.gz");

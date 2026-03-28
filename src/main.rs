@@ -177,8 +177,12 @@ struct QuerySession {
     chromosome: String,
     start: u64,
     end: u64,
-    // Last position returned (to resume from next position)
+    // Last position returned to the client (used to resume pagination)
     last_position: Option<u64>,
+    // Number of variants at last_position already sent to the client.
+    // Required to correctly resume when a page boundary falls inside a group
+    // of variants that all share the same genomic position.
+    last_position_skip: usize,
     last_accessed_at: std::time::Instant,
     // Filter expression to apply to variants
     filter: String,
@@ -576,6 +580,10 @@ impl VcfServer {
         }
 
         let last_position = batch.last().unwrap().position;
+        // Count how many variants at last_position are included in this batch.
+        // This is needed so get_next_variant can skip them on resume without
+        // incrementing the position and missing same-position variants.
+        let last_position_skip = batch.iter().filter(|v| v.position == last_position).count();
 
         // Create session only when there are more variants beyond this batch
         let session_id = if has_more {
@@ -585,6 +593,7 @@ impl VcfServer {
                 start,
                 end,
                 last_position: Some(last_position),
+                last_position_skip,
                 last_accessed_at: std::time::Instant::now(),
                 filter: filter.clone(),
             };
@@ -626,7 +635,7 @@ impl VcfServer {
         let start_time = std::time::Instant::now();
         const BATCH_SIZE: usize = 5;
 
-        let (chromosome, last_pos, end, filter) = {
+        let (chromosome, last_pos, last_pos_skip, end, filter) = {
             let mut sessions = self.query_sessions.lock().await;
 
             let session = sessions.get_mut(&session_id).ok_or_else(|| {
@@ -650,6 +659,7 @@ impl VcfServer {
             (
                 session.chromosome.clone(),
                 session.last_position.unwrap_or(session.start),
+                session.last_position_skip,
                 session.end,
                 session.filter.clone(),
             )
@@ -657,9 +667,10 @@ impl VcfServer {
 
         let index = self.index.lock().await;
 
-        // Query from next position after last returned batch
-        let next_pos = last_pos + 1;
-        let (variants, _) = index.query_by_region(&chromosome, next_pos, end);
+        // Query from last_pos (not last_pos+1) so we include any remaining variants
+        // at last_pos that were not returned on the previous page, then skip past
+        // the ones that were already sent.
+        let (variants, _) = index.query_by_region(&chromosome, last_pos, end);
         let filter_engine = index.filter_engine();
 
         if !filter.trim().is_empty() {
@@ -667,6 +678,7 @@ impl VcfServer {
         }
 
         // Collect up to BATCH_SIZE+1 filtered variants; the extra one tells us if has_more is true
+        let mut skip_remaining = last_pos_skip;
         let mut batch: Vec<Variant> = variants
             .into_iter()
             .map(format_variant)
@@ -687,6 +699,15 @@ impl VcfServer {
                         eval_error.as_deref(),
                     );
                     passes
+                }
+            })
+            .skip_while(|v| {
+                // Skip variants at last_pos that were already sent on the previous page.
+                if v.position == last_pos && skip_remaining > 0 {
+                    skip_remaining -= 1;
+                    true
+                } else {
+                    false
                 }
             })
             .take(BATCH_SIZE + 1)
@@ -725,13 +746,23 @@ impl VcfServer {
         }
 
         let last_position = batch.last().unwrap().position;
+        // Compute how many variants at last_position are in this batch, so the
+        // next page can skip past them if the boundary falls at that position again.
+        let count_at_last = batch.iter().filter(|v| v.position == last_position).count();
+        let new_skip = if last_position == last_pos {
+            // Still ending at the same position — accumulate the skip count.
+            last_pos_skip + count_at_last
+        } else {
+            count_at_last
+        };
         let reference_genome = index.get_reference_genome();
         drop(index);
 
-        // Update session with last position in this batch
+        // Update session with last position and skip count for this batch
         let mut sessions = self.query_sessions.lock().await;
         if let Some(session) = sessions.get_mut(&session_id) {
             session.last_position = Some(last_position);
+            session.last_position_skip = new_skip;
         }
 
         if !has_more {
