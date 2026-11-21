@@ -1,6 +1,8 @@
+mod response_budget;
 mod vcf;
 
 use clap::Parser;
+use response_budget::{DEFAULT_MAX_RESPONSE_BYTES, FittedVariants, fit_variants, variant_budget};
 use rmcp::{
     ErrorData as McpError, RoleServer, ServerHandler, ServiceExt,
     handler::server::{router::tool::ToolRouter, tool::ToolCallContext, wrapper::Parameters},
@@ -35,6 +37,16 @@ struct Args {
     #[arg(long, value_name = "ADDR:PORT")]
     sse: Option<String>,
 
+    /// Disable Host header validation so any host may connect (HTTP mode only).
+    /// By default only localhost, 127.0.0.1 and ::1 are accepted.
+    #[arg(long, conflicts_with = "allowed_hosts")]
+    allow_all_hosts: bool,
+
+    /// Allowed Host header value (HTTP mode only); may be repeated.
+    /// Replaces the default localhost allow-list when given.
+    #[arg(long = "allowed-host", value_name = "HOST")]
+    allowed_hosts: Vec<String>,
+
     /// Enable debug logging
     #[arg(long)]
     debug: bool,
@@ -42,6 +54,13 @@ struct Args {
     /// Never save the built tabix index to disk (for read-only/ephemeral environments)
     #[arg(long)]
     never_save_index: bool,
+
+    /// Maximum size in bytes of the JSON returned by variant queries
+    /// (query_by_position, query_by_id, start_region_query, get_next_variant).
+    /// Larger results are cut short and flagged with `truncated: true`; single
+    /// records over the limit are shortened and flagged `record_truncated: true`.
+    #[arg(long, value_name = "BYTES", default_value_t = DEFAULT_MAX_RESPONSE_BYTES)]
+    max_response_bytes: usize,
 }
 
 // Parameter structs for MCP tools
@@ -85,7 +104,7 @@ struct StreamRegionParams {
     start: u64,
     /// End position (1-based, inclusive)
     end: u64,
-    /// Optional filter expression (e.g., "QUAL > 30 AND FILTER == PASS"). Empty or omitted means no filtering.
+    /// Optional filter expression, e.g. `QUAL > 30 && FILTER == "PASS"`. Combine conditions with `&&` / `||` (not AND/OR) and put string values in double quotes; an unquoted value such as PASS matches nothing. Call get_documentation with doc_type "filters" for the full syntax. Empty or omitted means no filtering.
     #[serde(default)]
     filter: String,
 }
@@ -93,13 +112,13 @@ struct StreamRegionParams {
 #[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
 struct NextVariantParams {
     /// Session ID from start_region_query or get_next_variant response
-    session_id: String,
+    region_query_session_id: String,
 }
 
 #[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
 struct CloseSessionParams {
     /// Session ID to close
-    session_id: String,
+    region_query_session_id: String,
 }
 
 #[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
@@ -114,12 +133,79 @@ fn default_doc_type() -> String {
 }
 
 #[derive(Debug, serde::Serialize)]
-struct QueryResult<T>
-where
-    T: serde::Serialize,
-{
+struct QueryResult {
+    /// Total number of matching records
     count: usize,
-    items: Vec<T>,
+    /// Number of records in `items` (less than `count` when truncated)
+    returned_count: usize,
+    /// True when records were left out to stay under the response size limit
+    truncated: bool,
+    /// Number of returned records shortened to fit (`record_truncated: true`)
+    #[serde(skip_serializing_if = "is_zero")]
+    records_shrunk: usize,
+    /// What to do about truncated or shortened records
+    #[serde(skip_serializing_if = "Option::is_none")]
+    hint: Option<String>,
+    items: Vec<serde_json::Value>,
+}
+
+impl QueryResult {
+    fn new(count: usize, fitted: FittedVariants, max_response_bytes: usize) -> Self {
+        let hint = size_limit_hint(&fitted, max_response_bytes, HintContext::Lookup, count);
+        QueryResult {
+            count,
+            returned_count: fitted.items.len(),
+            truncated: fitted.truncated,
+            records_shrunk: fitted.records_shrunk,
+            hint,
+            items: fitted.items,
+        }
+    }
+}
+
+fn is_zero(n: &usize) -> bool {
+    *n == 0
+}
+
+enum HintContext {
+    /// query_by_position / query_by_id: no way to fetch the rest except a region query
+    Lookup,
+    /// start_region_query / get_next_variant: the rest comes with get_next_variant
+    Stream,
+}
+
+/// Explain a size-limited response to the caller, or None if nothing was cut.
+fn size_limit_hint(
+    fitted: &FittedVariants,
+    max_response_bytes: usize,
+    context: HintContext,
+    total_count: usize,
+) -> Option<String> {
+    let mut parts = Vec::new();
+    if fitted.truncated {
+        parts.push(match context {
+            HintContext::Lookup => format!(
+                "Response size limit ({max_response_bytes} bytes) reached: returned {} of {total_count} records. \
+                 Use start_region_query on the region to page through all records, and add a filter \
+                 (e.g. FILTER == \"PASS\") to skip records you do not need.",
+                fitted.items.len()
+            ),
+            HintContext::Stream => format!(
+                "Response size limit ({max_response_bytes} bytes) reached: this batch has fewer than 5 records. \
+                 Call get_next_variant to continue."
+            ),
+        });
+    }
+    if fitted.records_shrunk > 0 {
+        parts.push(format!(
+            "{} record(s) were larger than the size limit on their own and were shortened \
+             (record_truncated: true): large INFO values are replaced by \
+             {{\"omitted\": true, \"entries\": N, \"bytes\": N}} and sample genotypes may be omitted \
+             (samples_omitted). The omitted data is not available through this server.",
+            fitted.records_shrunk
+        ));
+    }
+    (!parts.is_empty()).then(|| parts.join(" "))
 }
 
 #[derive(Debug, serde::Serialize)]
@@ -149,7 +235,7 @@ struct QueryByPositionResponse {
     matched_chromosome: Option<String>,
     available_chromosomes_sample: Option<Vec<String>>,
     alternate_chromosome_suggestion: Option<String>,
-    result: QueryResult<Variant>,
+    result: QueryResult,
 }
 
 #[derive(Debug, serde::Serialize)]
@@ -157,19 +243,55 @@ struct QueryByIdResponse {
     status: QueryStatus,
     reference_genome: String,
     query: IdQuery,
-    result: QueryResult<Variant>,
+    result: QueryResult,
 }
 
 #[derive(Debug, serde::Serialize)]
 struct StreamQueryResponse {
     /// Variants in this batch (up to 5), or empty if exhausted
-    variants: Vec<Variant>,
+    variants: Vec<serde_json::Value>,
     /// Session ID for subsequent calls, or null if query complete
-    session_id: Option<String>,
+    region_query_session_id: Option<String>,
     /// Whether more variants exist in this region
     has_more: bool,
+    /// True when this batch was cut short by the response size limit
+    truncated: bool,
+    /// Number of returned records shortened to fit (`record_truncated: true`)
+    #[serde(skip_serializing_if = "is_zero")]
+    records_shrunk: usize,
+    /// What to do about truncated or shortened records
+    #[serde(skip_serializing_if = "Option::is_none")]
+    hint: Option<String>,
     reference_genome: String,
     matched_chromosome: Option<String>,
+}
+
+impl StreamQueryResponse {
+    fn new(
+        fitted: FittedVariants,
+        region_query_session_id: Option<String>,
+        has_more: bool,
+        reference_genome: String,
+        matched_chromosome: String,
+        max_response_bytes: usize,
+    ) -> Self {
+        let hint = size_limit_hint(
+            &fitted,
+            max_response_bytes,
+            HintContext::Stream,
+            fitted.items.len(),
+        );
+        StreamQueryResponse {
+            region_query_session_id,
+            has_more,
+            truncated: fitted.truncated,
+            records_shrunk: fitted.records_shrunk,
+            hint,
+            variants: fitted.items,
+            reference_genome,
+            matched_chromosome: Some(matched_chromosome),
+        }
+    }
 }
 
 // Store iterator state for a streaming query
@@ -197,6 +319,8 @@ struct VcfServer {
     debug: bool,
     // Track active query sessions by session ID
     query_sessions: Arc<Mutex<HashMap<String, QuerySession>>>,
+    // Size limit for variant-returning tool responses (see --max-response-bytes)
+    max_response_bytes: usize,
 }
 
 #[tool_router]
@@ -207,7 +331,13 @@ impl VcfServer {
             tool_router: Self::tool_router(),
             debug,
             query_sessions: Arc::new(Mutex::new(HashMap::new())),
+            max_response_bytes: DEFAULT_MAX_RESPONSE_BYTES,
         }
+    }
+
+    fn with_max_response_bytes(mut self, max_response_bytes: usize) -> Self {
+        self.max_response_bytes = max_response_bytes;
+        self
     }
 
     /// Helper method to create a CallToolResult with optional debug logging
@@ -264,7 +394,7 @@ impl VcfServer {
     }
 
     #[tool(
-        description = "Query variants at a specific genomic position. NOTE: Coordinates are genome build-specific (GRCh37 vs GRCh38). Check the reference_genome field in the response to verify which build is being queried."
+        description = "Query variants at a specific genomic position. NOTE: Coordinates are genome build-specific (GRCh37 vs GRCh38). Check the reference_genome field in the response to verify which build is being queried. Returns every record overlapping the position, including long structural variants that start earlier. Responses are size-limited: if result.truncated is true, not every matching record was returned (see result.hint); a record with record_truncated: true had oversized fields (e.g. a large ANN list) replaced by {omitted: true, entries, bytes}."
     )]
     async fn query_by_position(
         &self,
@@ -283,8 +413,9 @@ impl VcfServer {
             let index = self.index.lock().await;
             let (variants, matched_chr) = index.query_by_position(&requested_chromosome, position);
             let count = variants.len();
-            let items: Vec<Variant> = variants.into_iter().map(format_variant).collect();
-            let result = QueryResult { count, items };
+            let variants: Vec<Variant> = variants.into_iter().map(format_variant).collect();
+            let fitted = fit_variants(&variants, variant_budget(self.max_response_bytes, 0));
+            let result = QueryResult::new(count, fitted, self.max_response_bytes);
 
             let (status, available_sample, alternate_suggestion) =
                 build_chromosome_response(&index, &requested_chromosome, &matched_chr);
@@ -315,7 +446,7 @@ impl VcfServer {
     }
 
     #[tool(
-        description = "Query variants by variant ID or genomic position. Accepts a comma-separated list where each entry is either a variant ID (e.g., 'rs6054257') or a chromosome:position coordinate (e.g., 'chr11:46352' or '2:74635'). Returns a flat list of all matching variants. Check the reference_genome field in the response to verify which genome build the coordinates use."
+        description = "Query variants by variant ID or genomic position. Accepts a comma-separated list where each entry is either a variant ID (e.g., 'rs6054257') or a chromosome:position coordinate (e.g., 'chr11:46352' or '2:74635'). Returns a flat list of all matching variants. Check the reference_genome field in the response to verify which genome build the coordinates use. Responses are size-limited: if result.truncated is true, not every matching record was returned (see result.hint); a record with record_truncated: true had oversized fields (e.g. a large ANN list) replaced by {omitted: true, entries, bytes}."
     )]
     async fn query_by_id(
         &self,
@@ -359,10 +490,13 @@ impl VcfServer {
             }
 
             let count = all_items.len();
-            let result = QueryResult {
-                count,
-                items: all_items,
-            };
+            // The requested IDs are echoed back, so leave room for them too.
+            let echoed_ids_bytes = serde_json::to_string(&parsed_ids).map_or(0, |s| s.len());
+            let fitted = fit_variants(
+                &all_items,
+                variant_budget(self.max_response_bytes, echoed_ids_bytes),
+            );
+            let result = QueryResult::new(count, fitted, self.max_response_bytes);
 
             let status = if result.count > 0 {
                 QueryStatus::Ok
@@ -456,7 +590,7 @@ impl VcfServer {
     }
 
     #[tool(
-        description = "Start a new streaming query session for a genomic region. Returns up to 5 variants per call. If has_more is true, use get_next_variant with the returned session_id to retrieve subsequent batches. Optionally filter variants using a filter expression (e.g., 'QUAL > 30 AND FILTER == PASS')."
+        description = "Start a new streaming query session for a genomic region. Returns up to 5 variants per call. If has_more is true, use get_next_variant with the returned region_query_session_id to retrieve subsequent batches. Optionally filter variants using a filter expression (e.g., 'QUAL > 30 && FILTER == \"PASS\"'; use && / || and double-quote string values). A batch may hold fewer than 5 variants if the response size limit is reached (truncated: true); oversized records are shortened (record_truncated: true)."
     )]
     async fn start_region_query(
         &self,
@@ -552,21 +686,28 @@ impl VcfServer {
             .take(BATCH_SIZE + 1)
             .collect();
 
-        let has_more = batch.len() > BATCH_SIZE;
+        let mut has_more = batch.len() > BATCH_SIZE;
         if has_more {
             batch.truncate(BATCH_SIZE);
         }
 
+        // Keep the batch under the response size limit. Records that do not fit
+        // are dropped from this batch and returned by the next get_next_variant.
+        let fitted = fit_variants(&batch, variant_budget(self.max_response_bytes, 0));
+        batch.truncate(fitted.items.len());
+        has_more |= fitted.truncated;
+
         let reference_genome = index.get_reference_genome();
 
         if batch.is_empty() {
-            let response = StreamQueryResponse {
-                variants: vec![],
-                session_id: None,
-                has_more: false,
+            let response = StreamQueryResponse::new(
+                fitted,
+                None,
+                false,
                 reference_genome,
-                matched_chromosome: Some(matched_chr_name),
-            };
+                matched_chr_name,
+                self.max_response_bytes,
+            );
 
             let payload = serde_json::to_value(response).map_err(|e| {
                 McpError::internal_error(
@@ -586,7 +727,7 @@ impl VcfServer {
         let last_position_skip = batch.iter().filter(|v| v.position == last_position).count();
 
         // Create session only when there are more variants beyond this batch
-        let session_id = if has_more {
+        let region_query_session_id = if has_more {
             let id = Uuid::new_v4().to_string();
             let session = QuerySession {
                 chromosome: matched_chr_name.clone(),
@@ -606,13 +747,14 @@ impl VcfServer {
             None
         };
 
-        let response = StreamQueryResponse {
-            variants: batch,
-            session_id,
+        let response = StreamQueryResponse::new(
+            fitted,
+            region_query_session_id,
             has_more,
             reference_genome,
-            matched_chromosome: Some(matched_chr_name),
-        };
+            matched_chr_name,
+            self.max_response_bytes,
+        );
 
         let payload = serde_json::to_value(response).map_err(|e| {
             McpError::internal_error(
@@ -630,7 +772,9 @@ impl VcfServer {
     )]
     async fn get_next_variant(
         &self,
-        Parameters(NextVariantParams { session_id }): Parameters<NextVariantParams>,
+        Parameters(NextVariantParams {
+            region_query_session_id,
+        }): Parameters<NextVariantParams>,
     ) -> Result<CallToolResult, McpError> {
         let start_time = std::time::Instant::now();
         const BATCH_SIZE: usize = 5;
@@ -638,7 +782,7 @@ impl VcfServer {
         let (chromosome, last_pos, last_pos_skip, end, filter) = {
             let mut sessions = self.query_sessions.lock().await;
 
-            let session = sessions.get_mut(&session_id).ok_or_else(|| {
+            let session = sessions.get_mut(&region_query_session_id).ok_or_else(|| {
                 McpError::internal_error(
                     "Session not found or expired. Start a new query with start_region_query.",
                     None,
@@ -647,7 +791,7 @@ impl VcfServer {
 
             // Check session inactivity timeout (5 minutes)
             if session.last_accessed_at.elapsed().as_secs() > 300 {
-                sessions.remove(&session_id);
+                sessions.remove(&region_query_session_id);
                 return Err(McpError::internal_error(
                     "Session expired. Start a new query.",
                     None,
@@ -682,6 +826,12 @@ impl VcfServer {
         let mut batch: Vec<Variant> = variants
             .into_iter()
             .map(format_variant)
+            // The tabix query returns every record *overlapping* [last_pos, end],
+            // including ones that start earlier (e.g. long deletions). Results are
+            // sorted by start position, so anything starting before last_pos was
+            // already sent on a previous page. Without this, such records are
+            // re-sent on every page and the stream never advances.
+            .filter(|v| v.position >= last_pos)
             .filter(|v| {
                 if filter.trim().is_empty() {
                     true
@@ -713,10 +863,17 @@ impl VcfServer {
             .take(BATCH_SIZE + 1)
             .collect();
 
-        let has_more = batch.len() > BATCH_SIZE;
+        let mut has_more = batch.len() > BATCH_SIZE;
         if has_more {
             batch.truncate(BATCH_SIZE);
         }
+
+        // Keep the batch under the response size limit. The session's resume
+        // point is computed from the records actually sent (below), so records
+        // that do not fit are returned by the next call.
+        let fitted = fit_variants(&batch, variant_budget(self.max_response_bytes, 0));
+        batch.truncate(fitted.items.len());
+        has_more |= fitted.truncated;
 
         if batch.is_empty() {
             // No more variants - close session
@@ -724,15 +881,16 @@ impl VcfServer {
             drop(index);
 
             let mut sessions = self.query_sessions.lock().await;
-            sessions.remove(&session_id);
+            sessions.remove(&region_query_session_id);
 
-            let response = StreamQueryResponse {
-                variants: vec![],
-                session_id: None,
-                has_more: false,
+            let response = StreamQueryResponse::new(
+                fitted,
+                None,
+                false,
                 reference_genome,
-                matched_chromosome: Some(chromosome),
-            };
+                chromosome,
+                self.max_response_bytes,
+            );
 
             let payload = serde_json::to_value(response).map_err(|e| {
                 McpError::internal_error(
@@ -760,23 +918,24 @@ impl VcfServer {
 
         // Update session with last position and skip count for this batch
         let mut sessions = self.query_sessions.lock().await;
-        if let Some(session) = sessions.get_mut(&session_id) {
+        if let Some(session) = sessions.get_mut(&region_query_session_id) {
             session.last_position = Some(last_position);
             session.last_position_skip = new_skip;
         }
 
         if !has_more {
-            sessions.remove(&session_id);
+            sessions.remove(&region_query_session_id);
         }
         drop(sessions);
 
-        let response = StreamQueryResponse {
-            variants: batch,
-            session_id: if has_more { Some(session_id) } else { None },
+        let response = StreamQueryResponse::new(
+            fitted,
+            has_more.then_some(region_query_session_id),
             has_more,
             reference_genome,
-            matched_chromosome: Some(chromosome),
-        };
+            chromosome,
+            self.max_response_bytes,
+        );
 
         let payload = serde_json::to_value(response).map_err(|e| {
             McpError::internal_error(
@@ -794,11 +953,13 @@ impl VcfServer {
     )]
     async fn close_query_session(
         &self,
-        Parameters(CloseSessionParams { session_id }): Parameters<CloseSessionParams>,
+        Parameters(CloseSessionParams {
+            region_query_session_id,
+        }): Parameters<CloseSessionParams>,
     ) -> Result<CallToolResult, McpError> {
         let start_time = std::time::Instant::now();
         let mut sessions = self.query_sessions.lock().await;
-        let existed = sessions.remove(&session_id).is_some();
+        let existed = sessions.remove(&region_query_session_id).is_some();
 
         let payload = serde_json::json!({
             "closed": existed,
@@ -1067,7 +1228,7 @@ async fn main() -> std::io::Result<()> {
     let index = load_vcf(&args.vcf_file, args.debug, save_index)?;
 
     // Create the MCP server
-    let server = VcfServer::new(index, args.debug);
+    let server = VcfServer::new(index, args.debug).with_max_response_bytes(args.max_response_bytes);
 
     // Run server with appropriate transport
     if let Some(addr) = args.sse {
@@ -1075,7 +1236,7 @@ async fn main() -> std::io::Result<()> {
             "VCF MCP Server ready. Starting SSE transport on {}...",
             addr
         );
-        run_sse_server(server, &addr).await?;
+        run_sse_server(server, &addr, args.allow_all_hosts, &args.allowed_hosts).await?;
     } else {
         eprintln!("VCF MCP Server ready. Starting stdio transport...");
 
@@ -1094,7 +1255,12 @@ async fn main() -> std::io::Result<()> {
     Ok(())
 }
 
-async fn run_sse_server(server: VcfServer, addr: &str) -> std::io::Result<()> {
+async fn run_sse_server(
+    server: VcfServer,
+    addr: &str,
+    allow_all_hosts: bool,
+    allowed_hosts: &[String],
+) -> std::io::Result<()> {
     use axum::{
         Router,
         extract::Request,
@@ -1109,7 +1275,16 @@ async fn run_sse_server(server: VcfServer, addr: &str) -> std::io::Result<()> {
         .parse()
         .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidInput, e))?;
 
-    let config = StreamableHttpServerConfig::default()
+    let base_config = if allow_all_hosts {
+        eprintln!("WARNING: Host header validation disabled; any host may connect");
+        StreamableHttpServerConfig::default().disable_allowed_hosts()
+    } else if allowed_hosts.is_empty() {
+        StreamableHttpServerConfig::default()
+    } else {
+        StreamableHttpServerConfig::default().with_allowed_hosts(allowed_hosts.iter().cloned())
+    };
+
+    let config = base_config
         .with_sse_keep_alive(Some(std::time::Duration::from_secs(15)))
         .with_sse_retry(Some(std::time::Duration::from_secs(5)))
         .with_legacy_session_mode(false)
@@ -1156,6 +1331,347 @@ mod tests {
     fn create_test_index() -> VcfIndex {
         let vcf_path = PathBuf::from("sample_data/sample.compressed.vcf.gz");
         load_vcf(&vcf_path, false, false).expect("Failed to load test VCF")
+    }
+
+    fn tool_text(result: CallToolResult) -> String {
+        result.content[0]
+            .as_text()
+            .expect("tool result should be text")
+            .text
+            .clone()
+    }
+
+    fn tool_json(result: CallToolResult) -> serde_json::Value {
+        serde_json::from_str(&tool_text(result)).expect("tool result should be JSON")
+    }
+
+    const LARGE_SV_VCF: &str = "sample_data/large-sv-annotation.vcf.gz";
+    const KGP_VCF: &str = "sample_data/1kGP_high_coverage_Illumina.chr1.filtered.SNV_INDEL_SV_phased_panel-head-1000.vcf.gz";
+
+    /// Every page of a streamed region query, as returned to the client.
+    struct StreamedPages {
+        /// (position, id) of every variant, across all pages, in order
+        variants: Vec<(u64, String)>,
+        /// Parsed JSON of each page
+        pages: Vec<serde_json::Value>,
+        /// Size in bytes of each page's JSON text
+        page_bytes: Vec<usize>,
+    }
+
+    /// Run start_region_query then get_next_variant until has_more is false.
+    async fn stream_region(
+        server: &VcfServer,
+        chromosome: &str,
+        start: u64,
+        end: u64,
+    ) -> StreamedPages {
+        let mut text = tool_text(
+            server
+                .start_region_query(Parameters(StreamRegionParams {
+                    chromosome: chromosome.into(),
+                    start,
+                    end,
+                    filter: String::new(),
+                }))
+                .await
+                .unwrap(),
+        );
+        let mut out = StreamedPages {
+            variants: Vec::new(),
+            pages: Vec::new(),
+            page_bytes: Vec::new(),
+        };
+        for _ in 0..1000 {
+            let page: serde_json::Value = serde_json::from_str(&text).unwrap();
+            out.page_bytes.push(text.len());
+            for v in page["variants"].as_array().unwrap() {
+                out.variants.push((
+                    v["position"].as_u64().unwrap(),
+                    v["id"].as_str().unwrap().to_string(),
+                ));
+            }
+            let has_more = page["has_more"].as_bool().unwrap();
+            let session = page["region_query_session_id"].as_str().map(str::to_string);
+            out.pages.push(page);
+            if !has_more {
+                assert!(
+                    session.is_none(),
+                    "finished query must not return a session id"
+                );
+                return out;
+            }
+            text = tool_text(
+                server
+                    .get_next_variant(Parameters(NextVariantParams {
+                        region_query_session_id: session.expect("has_more without a session id"),
+                    }))
+                    .await
+                    .unwrap(),
+            );
+        }
+        panic!("stream did not terminate within 1000 pages");
+    }
+
+    fn expected_region(
+        index: &VcfIndex,
+        chromosome: &str,
+        start: u64,
+        end: u64,
+    ) -> Vec<(u64, String)> {
+        let (variants, _) = index.query_by_region(chromosome, start, end);
+        variants
+            .iter()
+            .map(|v| (v.position, v.id.clone()))
+            .collect()
+    }
+
+    // Regression: resuming a stream re-queries tabix from last_pos, which also
+    // returns earlier-starting records that overlap it (long deletions). Those
+    // were re-sent on every page, so the stream never terminated. Region
+    // chr1:1-10443 of the 1kGP sample starts with a 44bp deletion at 10390.
+    // Each 1kGP record carries 3,202 samples, so this also exercises the
+    // response size limit on every page.
+    #[tokio::test]
+    async fn test_streaming_with_overlapping_deletions_terminates() {
+        let index =
+            load_vcf(&PathBuf::from(KGP_VCF), false, false).expect("Failed to load 1kGP sample");
+        let expected = expected_region(&index, "chr1", 1, 10443);
+        assert!(expected.len() > 5, "region must span multiple pages");
+
+        let server = VcfServer::new(index, false);
+        let streamed = stream_region(&server, "chr1", 1, 10443).await;
+
+        assert_eq!(
+            streamed.variants, expected,
+            "stream must return each variant once, in order"
+        );
+        for bytes in &streamed.page_bytes {
+            assert!(
+                *bytes <= DEFAULT_MAX_RESPONSE_BYTES,
+                "page of {bytes} bytes exceeds the limit"
+            );
+        }
+    }
+
+    // Regression: a Manta deletion spanning chr1:789477-224012315 with 22,813
+    // ANN entries made query_by_position return ~3 MB, which broke the client.
+    #[tokio::test]
+    async fn test_query_by_position_large_sv_is_shrunk_under_limit() {
+        let index = load_vcf(&PathBuf::from(LARGE_SV_VCF), false, false)
+            .expect("Failed to load large SV sample");
+        let (raw, _) = index.query_by_position("chr1", 1207339);
+        let raw_bytes = serde_json::to_string(&raw).unwrap().len();
+        assert!(
+            raw_bytes > 2_000_000,
+            "test data should be multi-megabyte unshrunk, got {raw_bytes}"
+        );
+
+        let server = VcfServer::new(index, false);
+        let text = tool_text(
+            server
+                .query_by_position(Parameters(QueryByPositionParams {
+                    chromosome: "chr1".into(),
+                    position: 1207339,
+                }))
+                .await
+                .unwrap(),
+        );
+        assert!(
+            text.len() <= DEFAULT_MAX_RESPONSE_BYTES,
+            "response is {} bytes",
+            text.len()
+        );
+
+        let response: serde_json::Value = serde_json::from_str(&text).unwrap();
+        let result = &response["result"];
+        assert_eq!(result["count"], 3, "deletion + two SNVs overlap 1207339");
+        assert_eq!(result["returned_count"], 3);
+        assert_eq!(result["truncated"], false);
+        assert_eq!(result["records_shrunk"], 1);
+        assert!(
+            result["hint"]
+                .as_str()
+                .unwrap()
+                .contains("record_truncated")
+        );
+
+        let items = result["items"].as_array().unwrap();
+        let sv = items
+            .iter()
+            .find(|v| v["id"] == "MantaDEL:6:7:8:0:0:0")
+            .expect("deletion returned");
+        assert_eq!(sv["record_truncated"], true);
+        assert_eq!(sv["info"]["ANN"]["omitted"], true);
+        assert_eq!(sv["info"]["ANN"]["entries"], 22813);
+        assert_eq!(sv["info"]["END"], 224012315);
+        assert_eq!(sv["info"]["SVTYPE"], "DEL");
+        assert_eq!(sv["filter"], serde_json::json!(["SV_HARD"]));
+
+        let small = items
+            .iter()
+            .find(|v| v["id"] == "rsSmall1")
+            .expect("small record returned");
+        assert!(small.get("record_truncated").is_none());
+        assert!(
+            small["info"]["ANN"].is_array(),
+            "small records keep their ANN"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_query_by_id_truncates_at_limit() {
+        let index = create_test_index();
+        let (all_20, _) = index.query_by_region("20", 1, 100_000_000);
+        let ids: Vec<String> = all_20
+            .iter()
+            .map(|v| format!("20:{}", v.position))
+            .collect();
+        let max_bytes = 5000;
+
+        let server = VcfServer::new(index, false).with_max_response_bytes(max_bytes);
+        let text = tool_text(
+            server
+                .query_by_id(Parameters(QueryByIdParams { id: ids.join(",") }))
+                .await
+                .unwrap(),
+        );
+        assert!(text.len() <= max_bytes, "response is {} bytes", text.len());
+
+        let response: serde_json::Value = serde_json::from_str(&text).unwrap();
+        let result = &response["result"];
+        assert_eq!(result["count"], all_20.len());
+        assert_eq!(result["truncated"], true);
+        let returned = result["returned_count"].as_u64().unwrap() as usize;
+        assert!(returned >= 1 && returned < all_20.len());
+        assert_eq!(result["items"].as_array().unwrap().len(), returned);
+        assert!(
+            result.get("records_shrunk").is_none(),
+            "small records are not shrunk"
+        );
+        assert!(
+            result["hint"]
+                .as_str()
+                .unwrap()
+                .contains("start_region_query")
+        );
+    }
+
+    #[tokio::test]
+    async fn test_query_by_position_under_limit_is_not_truncated() {
+        let server = VcfServer::new(create_test_index(), false);
+        let response = tool_json(
+            server
+                .query_by_position(Parameters(QueryByPositionParams {
+                    chromosome: "20".into(),
+                    position: 14370,
+                }))
+                .await
+                .unwrap(),
+        );
+        let result = &response["result"];
+        assert_eq!(result["count"], 1);
+        assert_eq!(result["returned_count"], 1);
+        assert_eq!(result["truncated"], false);
+        assert!(result.get("hint").is_none());
+        assert!(result.get("records_shrunk").is_none());
+    }
+
+    // With a small limit each batch holds fewer than 5 records; the resume point
+    // must follow what was actually sent so nothing is skipped or repeated.
+    #[tokio::test]
+    async fn test_streaming_under_small_limit_returns_every_record_once() {
+        let index = create_test_index();
+        let expected = expected_region(&index, "20", 1, 100_000_000);
+        let max_bytes = 5000;
+
+        let server = VcfServer::new(index, false).with_max_response_bytes(max_bytes);
+        let streamed = stream_region(&server, "20", 1, 100_000_000).await;
+
+        assert_eq!(streamed.variants, expected);
+        assert!(
+            streamed.pages.iter().any(|p| p["truncated"] == true),
+            "at least one batch should be cut short by the limit"
+        );
+        let first = &streamed.pages[0];
+        assert!(
+            first["variants"].as_array().unwrap().len() < 5 && first["has_more"] == true,
+            "first batch should be cut below 5 records with more remaining"
+        );
+        for bytes in &streamed.page_bytes {
+            assert!(
+                *bytes <= max_bytes,
+                "page of {bytes} bytes exceeds the limit"
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn test_streaming_region_with_large_sv_stays_under_limit() {
+        let index = load_vcf(&PathBuf::from(LARGE_SV_VCF), false, false)
+            .expect("Failed to load large SV sample");
+        let expected = expected_region(&index, "chr1", 1, 2_000_000);
+        assert_eq!(expected.len(), 4);
+
+        let server = VcfServer::new(index, false);
+        let streamed = stream_region(&server, "chr1", 1, 2_000_000).await;
+
+        assert_eq!(streamed.variants, expected);
+        for bytes in &streamed.page_bytes {
+            assert!(
+                *bytes <= DEFAULT_MAX_RESPONSE_BYTES,
+                "page of {bytes} bytes exceeds the limit"
+            );
+        }
+        let first = &streamed.pages[0];
+        assert_eq!(first["records_shrunk"], 1);
+        assert_eq!(first["variants"][0]["info"]["ANN"]["entries"], 22813);
+    }
+
+    #[tokio::test]
+    async fn test_close_query_session_on_live_session() {
+        let server = VcfServer::new(create_test_index(), false);
+        let (all, _) = server
+            .index
+            .lock()
+            .await
+            .query_by_region("20", 1, 100_000_000);
+        assert!(
+            all.len() > 5,
+            "sample must have more than one page on chr 20"
+        );
+        let page = tool_json(
+            server
+                .start_region_query(Parameters(StreamRegionParams {
+                    chromosome: "20".into(),
+                    start: 1,
+                    end: 100_000_000,
+                    filter: String::new(),
+                }))
+                .await
+                .unwrap(),
+        );
+        let region_query_session_id = page["region_query_session_id"]
+            .as_str()
+            .unwrap()
+            .to_string();
+        let closed = tool_json(
+            server
+                .close_query_session(Parameters(CloseSessionParams {
+                    region_query_session_id: region_query_session_id.clone(),
+                }))
+                .await
+                .unwrap(),
+        );
+        assert_eq!(closed["closed"], true);
+        assert!(
+            server
+                .get_next_variant(Parameters(NextVariantParams {
+                    region_query_session_id
+                }))
+                .await
+                .is_err(),
+            "closed session must not be resumable"
+        );
     }
 
     #[test]

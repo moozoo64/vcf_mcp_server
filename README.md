@@ -43,11 +43,12 @@ The binary will be at `./target/release/vcf_mcp_server`
 - `--sse <ADDR:PORT>` - Run HTTP server on specified address (e.g., 127.0.0.1:8090)
 - `--debug` - Enable debug logging
 - `--never-save-index` - Never save the built index to disk (for read-only/ephemeral environments)
+- `--max-response-bytes <BYTES>` - Maximum size of a variant query response (default 102400). See [Response Size Limit](#response-size-limit)
 
 ## Available MCP Tools
 
 ### 1. `query_by_position`
-Query variants at a specific genomic position.
+Query variants at a specific genomic position. Returns every record overlapping the position, including structural variants that start earlier. Large results are cut to the [response size limit](#response-size-limit).
 
 **Parameters:**
 - `chromosome` (string): Chromosome name (e.g., '1', '2', 'X', 'chr1')
@@ -111,13 +112,13 @@ Start a streaming query session for a genomic region. Returns one variant at a t
 - `end` (integer): End position (1-based, inclusive)
 - `filter` (string, optional): Filter expression to select variants (see [FILTER_EXAMPLES.md](FILTER_EXAMPLES.md))
 
-**Returns:** Array of up to 5 variants + session_id for subsequent calls
+**Returns:** Array of up to 5 variants (fewer if the [response size limit](#response-size-limit) is reached) + region_query_session_id for subsequent calls
 
 ### 4. `get_next_variant` (Streaming)
 Get the next variant from an active streaming session.
 
 **Parameters:**
-- `session_id` (string): Session ID from start_region_query
+- `region_query_session_id` (string): Session ID from start_region_query
 
 **Returns:** Array of up to 5 variants (empty array if exhausted)
 
@@ -125,7 +126,7 @@ Get the next variant from an active streaming session.
 Close an active streaming session and free resources.
 
 **Parameters:**
-- `session_id` (string): Session ID to close
+- `region_query_session_id` (string): Session ID to close
 
 **See [STREAMING.md](STREAMING.md) for detailed streaming API documentation.**
 
@@ -261,6 +262,34 @@ For the canonical filter grammar/reference from the library itself, call:
 
 **See [FILTER_EXAMPLES.md](FILTER_EXAMPLES.md) for comprehensive filter syntax documentation and examples.**
 
+## Response Size Limit
+
+Tools that return variants (`query_by_position`, `query_by_id`, `start_region_query`, `get_next_variant`) keep their JSON response under `--max-response-bytes` (default 102400, i.e. 100 KB). Without a limit, one record can be megabytes: for example a structural variant whose `ANN` field lists every gene it overlaps, or a record with thousands of samples. Responses that large break MCP clients.
+
+- **Too many records:** records are returned in order until the limit is reached and the rest are left out. `query_by_position` and `query_by_id` report `result.truncated: true`, `result.count` (all matches) and `result.returned_count` (records returned). Use `start_region_query` to page through the full set, adding a filter such as `FILTER == "PASS"` to skip records you do not need. In streaming, a batch can hold fewer than 5 variants (`truncated: true`); call `get_next_variant` to continue.
+- **One record over the limit:** the record is shortened instead of dropped and marked `record_truncated: true`. The largest parts go first: an oversized INFO value is replaced by a marker, and if sample genotypes are the largest part they are dropped with a count. Small INFO fields such as `SVTYPE`, `END` and `SVLEN` are kept. The omitted data is not available through the server.
+
+For example, the deletion in `sample_data/large-sv-annotation.vcf.gz` comes back as:
+
+```json
+{
+  "id": "MantaDEL:6:7:8:0:0:0",
+  "position": 789477,
+  "filter": ["SV_HARD"],
+  "info": {
+    "SVTYPE": "DEL",
+    "END": 224012315,
+    "SVLEN": [-223222838],
+    "ANN": { "omitted": true, "entries": 22813, "bytes": 2224569 }
+  },
+  "record_truncated": true
+}
+```
+
+A record whose sample genotypes are the largest part instead comes back with `"samples": {}` and `"samples_omitted": <number of samples>`.
+
+Responses that were cut or shortened include a `hint` explaining what happened. `records_shrunk` gives the number of shortened records. The limit is measured on the tool result's JSON text; the message on the wire is slightly larger because that text is escaped inside the MCP message.
+
 ## MCP Resources
 
 The server exposes an MCP resource for accessing VCF metadata:
@@ -334,6 +363,7 @@ Sample VCF files in the `sample_data/` directory are provided for testing and de
 
 - **VCFlib samples** - Small test files from the VCFlib project (MIT License)
 - **1000 Genomes Project data** - Subset of high-coverage sequencing data (CC BY-NC-SA 3.0)
+- **Synthetic large-SV file** - `large-sv-annotation.vcf.gz`, a generated structural variant with 22,813 ANN entries for response-size tests
 
 See [sample_data/README.md](sample_data/README.md) for complete attribution and licensing information.
 

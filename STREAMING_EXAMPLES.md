@@ -19,17 +19,17 @@ console.log("First batch:", session.variants);
 
 // If more exist, keep fetching until we have 5 total
 const all = [...session.variants];
-let current_session_id = session.session_id;
+let current_session_id = session.region_query_session_id;
 
 while (current_session_id && all.length < 5) {
-  const next = await get_next_variant({ session_id: current_session_id });
+  const next = await get_next_variant({ region_query_session_id: current_session_id });
   all.push(...next.variants);
-  current_session_id = next.session_id;
+  current_session_id = next.region_query_session_id;
 }
 
 // Clean up if session still active
 if (current_session_id) {
-  await close_query_session({ session_id: current_session_id });
+  await close_query_session({ region_query_session_id: current_session_id });
 }
 ```
 
@@ -50,8 +50,8 @@ while (true) {
     processVariant(v);
   }
 
-  if (!response.session_id) break;
-  response = await get_next_variant({ session_id: response.session_id });
+  if (!response.region_query_session_id) break;
+  response = await get_next_variant({ region_query_session_id: response.region_query_session_id });
 }
 
 console.log(`Processed ${count} variants`);
@@ -78,13 +78,13 @@ outer: while (true) {
     }
   }
 
-  if (!current.session_id) break;
-  current = await get_next_variant({ session_id: current.session_id });
+  if (!current.region_query_session_id) break;
+  current = await get_next_variant({ region_query_session_id: current.region_query_session_id });
 }
 
 // Clean up - important when stopping early!
-if (current.session_id) {
-  await close_query_session({ session_id: current.session_id });
+if (current.region_query_session_id) {
+  await close_query_session({ region_query_session_id: current.region_query_session_id });
 }
 
 if (pathogenic) {
@@ -134,7 +134,7 @@ await new Promise(resolve => setTimeout(resolve, 301000));
 
 try {
   // This will fail - session expired
-  const next = await get_next_variant({ session_id: session.session_id });
+  const next = await get_next_variant({ region_query_session_id: session.region_query_session_id });
 } catch (error) {
   console.log("Session expired:", error.message);
   
@@ -144,7 +144,7 @@ try {
     start: 60000,
     end: 70000
   });
-  console.log("New session started:", newSession.session_id);
+  console.log("New session started:", newSession.region_query_session_id);
 }
 ```
 
@@ -165,15 +165,15 @@ const session2 = await start_region_query({
 });
 
 // Process from both regions
-const v1 = await get_next_variant({ session_id: session1.session_id });
-const v2 = await get_next_variant({ session_id: session2.session_id });
+const v1 = await get_next_variant({ region_query_session_id: session1.region_query_session_id });
+const v2 = await get_next_variant({ region_query_session_id: session2.region_query_session_id });
 
 console.log("Variant from chr1:", v1.variant);
 console.log("Variant from chr2:", v2.variant);
 
 // Clean up both sessions
-await close_query_session({ session_id: session1.session_id });
-await close_query_session({ session_id: session2.session_id });
+await close_query_session({ region_query_session_id: session1.region_query_session_id });
+await close_query_session({ region_query_session_id: session2.region_query_session_id });
 ```
 
 ## Example 8: Error Recovery
@@ -194,18 +194,18 @@ async function robustStreamingQuery(chr, start, end) {
         variants.push(v);
       }
 
-      if (!response.session_id) break;
+      if (!response.region_query_session_id) break;
 
       try {
         response = await get_next_variant({ 
-          session_id: response.session_id 
+          region_query_session_id: response.region_query_session_id 
         });
       } catch (error) {
         console.error("Error getting next variant:", error);
 
         // Try to close session on error
         try {
-          await close_query_session({ session_id: response.session_id });
+          await close_query_session({ region_query_session_id: response.region_query_session_id });
         } catch (closeError) {
           // Session might already be closed
         }

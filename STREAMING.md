@@ -41,7 +41,7 @@ Streaming queries solve this by maintaining server-side session state and return
       // ... up to 5 variants
     }
   ],
-  "session_id": "550e8400-e29b-41d4-a716-446655440000",
+  "region_query_session_id": "550e8400-e29b-41d4-a716-446655440000",
   "has_more": true,
   "reference_genome": "GRCh38",
   "matched_chromosome": "20"
@@ -55,7 +55,7 @@ Streaming queries solve this by maintaining server-side session state and return
 ```javascript
 // LLM calls: get_next_variant
 {
-  "session_id": "550e8400-e29b-41d4-a716-446655440000"
+  "region_query_session_id": "550e8400-e29b-41d4-a716-446655440000"
 }
 
 // Response:
@@ -69,7 +69,7 @@ Streaming queries solve this by maintaining server-side session state and return
     }
     // ... up to 5 variants
   ],
-  "session_id": "550e8400-e29b-41d4-a716-446655440000",
+  "region_query_session_id": "550e8400-e29b-41d4-a716-446655440000",
   "has_more": true,
   "reference_genome": "GRCh38",
   "matched_chromosome": "20"
@@ -81,13 +81,13 @@ Streaming queries solve this by maintaining server-side session state and return
 ```javascript
 // LLM calls: get_next_variant (when no more variants)
 {
-  "session_id": "550e8400-e29b-41d4-a716-446655440000"
+  "region_query_session_id": "550e8400-e29b-41d4-a716-446655440000"
 }
 
 // Response:
 {
   "variants": [],
-  "session_id": null,
+  "region_query_session_id": null,
   "has_more": false,
   "reference_genome": "GRCh38",
   "matched_chromosome": "20"
@@ -108,8 +108,11 @@ Start a new streaming query session for a genomic region.
 
 **Returns:**
 - `variants`: Array of up to 5 variants matching filter (empty array if none found)
-- `session_id`: UUID for subsequent calls (or null if no more variants)
+- `region_query_session_id`: UUID for subsequent calls (or null if no more variants)
 - `has_more`: Whether more variants exist
+- `truncated`: True if this batch was cut short by the response size limit (fewer than 5 variants although more exist)
+- `records_shrunk` (only when non-zero): Number of variants shortened to fit the limit (`record_truncated: true`)
+- `hint` (only when something was cut): What happened and what to do next
 - `reference_genome`: Genome build (GRCh37/GRCh38/etc.)
 - `matched_chromosome`: Actual chromosome name used
 
@@ -122,12 +125,13 @@ Start a new streaming query session for a genomic region.
 Get the next variant from an active session.
 
 **Parameters:**
-- `session_id` (string): Session ID from `start_region_query` or previous `get_next_variant`
+- `region_query_session_id` (string): Session ID from `start_region_query` or previous `get_next_variant`
 
 **Returns:**
 - `variants`: Array of up to 5 variants (empty array if exhausted)
-- `session_id`: Same ID (or null if exhausted)
+- `region_query_session_id`: Same ID (or null if exhausted)
 - `has_more`: Whether more variants exist
+- `truncated`, `records_shrunk`, `hint`: As for `start_region_query`
 - `reference_genome`: Genome build
 - `matched_chromosome`: Chromosome name
 
@@ -140,7 +144,7 @@ Get the next variant from an active session.
 Explicitly close a session and free resources.
 
 **Parameters:**
-- `session_id` (string): Session ID to close
+- `region_query_session_id` (string): Session ID to close
 
 **Returns:**
 - `closed` (bool): Whether session existed
@@ -169,16 +173,16 @@ for (const v of init.variants) {
 }
 
 // Get remaining batches
-let session_id = init.session_id;
-while (session_id) {
-  const next = await get_next_variant({ session_id });
+let region_query_session_id = init.region_query_session_id;
+while (region_query_session_id) {
+  const next = await get_next_variant({ region_query_session_id });
 
   for (const v of next.variants) {
     processVariant(v);
   }
 
-  // Update session_id (becomes null when done)
-  session_id = next.session_id;
+  // Update region_query_session_id (becomes null when done)
+  region_query_session_id = next.region_query_session_id;
 }
 ```
 
@@ -194,22 +198,22 @@ const session = await start_region_query({
 const pathogenic = [];
 let current = session;
 
-while (current.session_id && pathogenic.length < 5) {
+while (current.region_query_session_id && pathogenic.length < 5) {
   for (const v of current.variants) {
     if (isPathogenic(v)) pathogenic.push(v);
     if (pathogenic.length >= 5) break;
   }
 
   if (current.has_more && pathogenic.length < 5) {
-    current = await get_next_variant({ session_id: current.session_id });
+    current = await get_next_variant({ region_query_session_id: current.region_query_session_id });
   } else {
     break;
   }
 }
 
 // LLM can stop early without fetching all variants
-if (current.session_id) {
-  await close_query_session({ session_id: current.session_id });
+if (current.region_query_session_id) {
+  await close_query_session({ region_query_session_id: current.region_query_session_id });
 }
 ```
 

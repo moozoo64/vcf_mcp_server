@@ -80,13 +80,13 @@ const session = await start_region_query({
 processVariant(session.variant);
 
 // 3. Get remaining variants
-let sid = session.session_id;
+let sid = session.region_query_session_id;
 while (sid) {
-  const next = await get_next_variant({ session_id: sid });
+  const next = await get_next_variant({ region_query_session_id: sid });
   if (next.variant) {
     processVariant(next.variant);
   }
-  sid = next.session_id; // null when done
+  sid = next.region_query_session_id; // null when done
 }
 ```
 

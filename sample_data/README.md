@@ -28,6 +28,16 @@ VCFlib is a C++ library for parsing and manipulating VCF files. These sample fil
 
 This file contains a subset (first 1000 lines) of high-coverage Illumina sequencing data from chromosome 1, filtered for SNVs, INDELs, and structural variants with phasing information.
 
+## Synthetic Large Structural Variant
+
+**Files:**
+- `large-sv-annotation.vcf.gz`
+- `make_large_sv_annotation.py` (regenerates the file; needs `bgzip` and `tabix`)
+
+**Source:** Generated for this project; no external data.
+
+Models a Manta structural-variant call that made `query_by_position` return about 3 MB: a deletion `MantaDEL:6:7:8:0:0:0` spanning chr1:789477-224012315 (FILTER `SV_HARD`) with 22,813 `ANN` entries, one per overlapped gene, plus three small records inside it (two at chr1:1207339, one at chr1:1300000). Used by the response size limit tests.
+
 ## 1001 Genomes Arabidopsis Data
 
 **Files:**

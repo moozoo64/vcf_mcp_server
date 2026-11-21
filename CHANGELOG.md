@@ -7,8 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- Response size limit for variant queries (`query_by_position`, `query_by_id`, `start_region_query`, `get_next_variant`), set with `--max-response-bytes` (default 100 KB). Previously a single structural variant with a large `ANN` list could make `query_by_position` return several megabytes and break the client. Records are returned until the limit is reached and the response reports `truncated: true` with a `hint`; `query_by_position` / `query_by_id` also report `returned_count` alongside `count`. A record over the limit on its own is shortened (`record_truncated: true`): its largest INFO values or its sample genotypes are replaced by an `{"omitted": true, "entries": N, "bytes": N}` marker or a `samples_omitted` count.
+
 ### Changed
+- **BREAKING:** The streaming session identifier is renamed from `session_id` to `region_query_session_id`, both in the `get_next_variant` / `close_query_session` parameters and in the `start_region_query` / `get_next_variant` responses. Claude Desktop drops tool arguments named `session_id` before they reach the server (anthropics/claude-code issue #77248), which made both tools fail with `missing field 'session_id'`. Clients must send `region_query_session_id`; `session_id` is no longer accepted.
 - `query_by_id` now accepts a comma-separated list of variant IDs and/or `chrom:pos` coordinates (e.g., `'rs1234,chr11:46352,rs46352,chr2:74635'`). Entries with a `:` are treated as `chromosome:position` lookups; all others are looked up by variant ID. Returns a flat, deduplicated list of all matching variants. Response field renamed from `query.id` to `query.ids` (array).
+
+### Fixed
+- The `start_region_query` tool description and `filter` parameter description gave the example `QUAL > 30 AND FILTER == PASS`, which the filter engine rejects (`AND` is a parse error) and which matches nothing with an unquoted `PASS`. Both now use `QUAL > 30 && FILTER == "PASS"`, matching the documentation, and say to use `&&` / `||` and double-quoted strings.
+- `get_next_variant` no longer re-sends variants that start before the resume position (for example long deletions overlapping it). Previously these records filled every batch, so streaming over such a region never reached `has_more: false`.
 
 ## [0.2.3] - 2026
 

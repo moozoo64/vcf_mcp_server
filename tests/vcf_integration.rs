@@ -620,7 +620,7 @@ async fn test_streaming_session_all_variants_filtered_out() {
     );
 
     // The new implementation should return a graceful response:
-    // { variant: None, session_id: None, has_more: false }
+    // { variant: None, region_query_session_id: None, has_more: false }
     // rather than an error
 }
 
