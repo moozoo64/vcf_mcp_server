@@ -45,6 +45,15 @@ The binary will be at `./target/release/vcf_mcp_server`
 - `--never-save-index` - Never save the built index to disk (for read-only/ephemeral environments)
 - `--max-response-bytes <BYTES>` - Maximum size of a variant query response (default 102400). See [Response Size Limit](#response-size-limit)
 
+### Stopping the server
+
+Press Ctrl+C, or send SIGTERM, to stop the server cleanly:
+
+- **HTTP mode:** stops accepting new connections, lets in-flight requests finish (up to 5 seconds), closes any MCP streams still open, then exits with status 0.
+- **stdio mode:** stops the MCP service and exits with status 0. Normally the client stops the server by closing stdin, which also exits cleanly.
+
+Press Ctrl+C a second time to exit immediately (status 130). If a clean shutdown takes longer than 10 seconds, the server exits with status 1. Signals sent while the VCF file is still loading stop the server at once; the index and statistics caches are written atomically, so this cannot leave a corrupt cache file.
+
 ## Available MCP Tools
 
 ### 1. `query_by_position`

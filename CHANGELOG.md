@@ -8,6 +8,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- Graceful shutdown on Ctrl+C and SIGTERM. In HTTP mode the server stops accepting connections, lets in-flight requests finish (up to 5 s) and closes open MCP streams; in stdio mode it stops the MCP service. Both exit with status 0. A second Ctrl+C exits immediately (status 130), and a shutdown taking over 10 s exits with status 1. Previously the process was killed immediately, dropping in-flight responses. Shutdown messages are written so that a closed stderr (the launching client has exited) cannot stop the server from shutting down.
 - Response size limit for variant queries (`query_by_position`, `query_by_id`, `start_region_query`, `get_next_variant`), set with `--max-response-bytes` (default 100 KB). Previously a single structural variant with a large `ANN` list could make `query_by_position` return several megabytes and break the client. Records are returned until the limit is reached and the response reports `truncated: true` with a `hint`; `query_by_position` / `query_by_id` also report `returned_count` alongside `count`. A record over the limit on its own is shortened (`record_truncated: true`): its largest INFO values or its sample genotypes are replaced by an `{"omitted": true, "entries": N, "bytes": N}` marker or a `samples_omitted` count.
 
 ### Changed

@@ -1,4 +1,5 @@
 mod response_budget;
+mod shutdown;
 mod vcf;
 
 use clap::Parser;
@@ -1230,29 +1231,82 @@ async fn main() -> std::io::Result<()> {
     // Create the MCP server
     let server = VcfServer::new(index, args.debug).with_max_response_bytes(args.max_response_bytes);
 
+    // Ctrl+C / SIGTERM handling starts here, after the VCF has loaded. Being
+    // killed during loading is safe: index and statistics caches are written to
+    // a temporary file and renamed into place.
+    let shutdown = shutdown::install()?;
+
     // Run server with appropriate transport
     if let Some(addr) = args.sse {
         eprintln!(
             "VCF MCP Server ready. Starting SSE transport on {}...",
             addr
         );
-        run_sse_server(server, &addr, args.allow_all_hosts, &args.allowed_hosts).await?;
+        run_sse_server(
+            server,
+            &addr,
+            args.allow_all_hosts,
+            &args.allowed_hosts,
+            shutdown,
+        )
+        .await?;
+        shutdown::log("Server stopped.");
     } else {
         eprintln!("VCF MCP Server ready. Starting stdio transport...");
-
-        // Run the server using stdio transport
-        let service = server
-            .serve(rmcp::transport::stdio())
-            .await
-            .map_err(|e| std::io::Error::other(e.to_string()))?;
-
-        service
-            .waiting()
-            .await
-            .map_err(|e| std::io::Error::other(e.to_string()))?;
+        run_stdio_server(server, shutdown, args.debug).await?;
     }
 
     Ok(())
+}
+
+/// Serve MCP over stdin/stdout until the client closes stdin or a shutdown
+/// signal arrives.
+async fn run_stdio_server(
+    server: VcfServer,
+    shutdown: tokio_util::sync::CancellationToken,
+    debug: bool,
+) -> std::io::Result<()> {
+    // serve() waits for the client's initialize handshake, so a signal can
+    // arrive before it returns.
+    let service = tokio::select! {
+        service = server.serve(rmcp::transport::stdio()) => {
+            service.map_err(|e| std::io::Error::other(e.to_string()))?
+        }
+        _ = shutdown.cancelled() => exit_after_stdio_shutdown(),
+    };
+
+    let service_token = service.cancellation_token();
+    tokio::spawn({
+        let shutdown = shutdown.clone();
+        async move {
+            shutdown.cancelled().await;
+            service_token.cancel();
+        }
+    });
+
+    let quit_reason = service
+        .waiting()
+        .await
+        .map_err(|e| std::io::Error::other(e.to_string()))?;
+    if debug {
+        shutdown::log(format_args!(
+            "[DEBUG] stdio service stopped: {quit_reason:?}"
+        ));
+    }
+    if shutdown.is_cancelled() {
+        exit_after_stdio_shutdown();
+    }
+    Ok(())
+}
+
+/// Finish a signal-driven stdio shutdown.
+///
+/// tokio reads stdin on a blocking thread that only returns when a line
+/// arrives, and the runtime waits for that thread when main returns, so a
+/// normal return could hang. Nothing is left to clean up, so exit directly.
+fn exit_after_stdio_shutdown() -> ! {
+    shutdown::log("Server stopped.");
+    std::process::exit(0);
 }
 
 async fn run_sse_server(
@@ -1260,6 +1314,7 @@ async fn run_sse_server(
     addr: &str,
     allow_all_hosts: bool,
     allowed_hosts: &[String],
+    shutdown: tokio_util::sync::CancellationToken,
 ) -> std::io::Result<()> {
     use axum::{
         Router,
@@ -1275,6 +1330,9 @@ async fn run_sse_server(
         .parse()
         .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidInput, e))?;
 
+    // Cancelling this token closes every MCP stream still open.
+    let sessions_token = tokio_util::sync::CancellationToken::new();
+
     let base_config = if allow_all_hosts {
         eprintln!("WARNING: Host header validation disabled; any host may connect");
         StreamableHttpServerConfig::default().disable_allowed_hosts()
@@ -1288,7 +1346,7 @@ async fn run_sse_server(
         .with_sse_keep_alive(Some(std::time::Duration::from_secs(15)))
         .with_sse_retry(Some(std::time::Duration::from_secs(5)))
         .with_legacy_session_mode(false)
-        .with_cancellation_token(tokio_util::sync::CancellationToken::new());
+        .with_cancellation_token(sessions_token.clone());
 
     let session_manager = Arc::new(LocalSessionManager::default());
 
@@ -1317,7 +1375,26 @@ async fn run_sse_server(
         bind_addr
     );
 
+    // Graceful shutdown: once a signal arrives, axum stops accepting
+    // connections, closes idle keep-alive connections and lets in-flight
+    // requests finish. Anything still open after REQUEST_DRAIN_PERIOD (e.g. a
+    // long-lived SSE stream, if session mode is ever enabled) is closed by
+    // cancelling the MCP token, so axum can return.
+    tokio::spawn({
+        let shutdown = shutdown.clone();
+        async move {
+            shutdown.cancelled().await;
+            shutdown::log(format_args!(
+                "No longer accepting connections; waiting up to {}s for in-flight requests...",
+                shutdown::REQUEST_DRAIN_PERIOD.as_secs()
+            ));
+            tokio::time::sleep(shutdown::REQUEST_DRAIN_PERIOD).await;
+            sessions_token.cancel();
+        }
+    });
+
     axum::serve(listener, app)
+        .with_graceful_shutdown(shutdown.cancelled_owned())
         .await
         .map_err(std::io::Error::other)
 }
