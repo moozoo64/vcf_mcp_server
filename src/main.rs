@@ -213,7 +213,7 @@ impl VcfServer {
     /// Helper method to create a CallToolResult with optional debug logging
     fn create_result_with_logging(
         &self,
-        content: Content,
+        content: ContentBlock,
         start_time: std::time::Instant,
     ) -> Result<CallToolResult, McpError> {
         if self.debug {
@@ -309,7 +309,7 @@ impl VcfServer {
             )
         })?;
 
-        let content = Content::json(payload)?;
+        let content = ContentBlock::json(payload)?;
 
         self.create_result_with_logging(content, start_time)
     }
@@ -387,7 +387,7 @@ impl VcfServer {
             )
         })?;
 
-        let content = Content::json(payload)?;
+        let content = ContentBlock::json(payload)?;
 
         self.create_result_with_logging(content, start_time)
     }
@@ -411,7 +411,7 @@ impl VcfServer {
             "search_applied": params.search,
         });
 
-        let content = Content::json(payload)?;
+        let content = ContentBlock::json(payload)?;
         self.create_result_with_logging(content, start_time)
     }
 
@@ -451,7 +451,7 @@ impl VcfServer {
             McpError::internal_error(format!("Failed to serialize statistics: {}", e), None)
         })?;
 
-        let content = Content::json(payload)?;
+        let content = ContentBlock::json(payload)?;
         self.create_result_with_logging(content, start_time)
     }
 
@@ -575,7 +575,7 @@ impl VcfServer {
                 )
             })?;
 
-            let content = Content::json(payload)?;
+            let content = ContentBlock::json(payload)?;
             return self.create_result_with_logging(content, start_time);
         }
 
@@ -621,7 +621,7 @@ impl VcfServer {
             )
         })?;
 
-        let content = Content::json(payload)?;
+        let content = ContentBlock::json(payload)?;
         self.create_result_with_logging(content, start_time)
     }
 
@@ -741,7 +741,7 @@ impl VcfServer {
                 )
             })?;
 
-            let content = Content::json(payload)?;
+            let content = ContentBlock::json(payload)?;
             return self.create_result_with_logging(content, start_time);
         }
 
@@ -785,7 +785,7 @@ impl VcfServer {
             )
         })?;
 
-        let content = Content::json(payload)?;
+        let content = ContentBlock::json(payload)?;
         self.create_result_with_logging(content, start_time)
     }
 
@@ -805,7 +805,7 @@ impl VcfServer {
             "message": if existed { "Session closed" } else { "Session not found" }
         });
 
-        let content = Content::json(payload)?;
+        let content = ContentBlock::json(payload)?;
         self.create_result_with_logging(content, start_time)
     }
 
@@ -832,7 +832,7 @@ impl VcfServer {
                     "content": documentation,
                     "format": "markdown"
                 });
-                let content = Content::json(payload)?;
+                let content = ContentBlock::json(payload)?;
                 return self.create_result_with_logging(content, start_time);
             }
             "all" => {
@@ -854,7 +854,7 @@ impl VcfServer {
                     "format": "markdown",
                     "sections": ["README.md", "STREAMING.md", "FILTER_EXAMPLES.md", "STREAMING_FILTER_EXAMPLES.md"]
                 });
-                let content = Content::json(payload)?;
+                let content = ContentBlock::json(payload)?;
                 return self.create_result_with_logging(content, start_time);
             }
             unknown => {
@@ -875,7 +875,7 @@ impl VcfServer {
             "format": "markdown"
         });
 
-        let content = Content::json(payload)?;
+        let content = ContentBlock::json(payload)?;
         self.create_result_with_logging(content, start_time)
     }
 
@@ -941,15 +941,15 @@ fn build_chromosome_response(
 }
 
 impl ServerHandler for VcfServer {
-    fn get_info(&self) -> ServerInfo {
-        ServerInfo::new(
+    fn get_info(&self) -> ServerConfig {
+        ServerConfig::new(
             ServerCapabilities::builder()
                 .enable_tools()
                 .enable_resources()
                 .build(),
         )
             .with_protocol_version(ProtocolVersion::V_2024_11_05)
-            .with_server_info(Implementation::from_build_env())
+            .with_server_info(Implementation::new(env!("CARGO_PKG_NAME"), env!("CARGO_PKG_VERSION")))
             .with_instructions(
                 "This server provides VCF variant query tools (query_by_position, query_by_id, start_region_query, get_next_variant, close_query_session) and a metadata resource (vcf://metadata). For large regions, use streaming tools (start_region_query + get_next_variant) to fetch variants one at a time. IMPORTANT: Genomic coordinates are specific to the reference genome build (GRCh37 vs GRCh38). Always check the reference_genome field in responses.".to_string()
             )
@@ -960,32 +960,20 @@ impl ServerHandler for VcfServer {
         _request: Option<PaginatedRequestParams>,
         _: RequestContext<RoleServer>,
     ) -> Result<ListResourcesResult, McpError> {
-        Ok(ListResourcesResult {
-            resources: vec![Annotated::new(
-                RawResource {
-                    uri: "vcf://metadata".to_string(),
-                    name: "VCF Metadata".to_string(),
-                    title: None,
-                    description: Some(
-                        "Metadata from the VCF file header including file format, contigs, and samples".to_string()
-                    ),
-                    mime_type: Some("application/json".to_string()),
-                    size: None,
-                    icons: None,
-                    meta: None,
-                },
-                None
-            )],
-            next_cursor: None,
-            meta: None,
-        })
+        Ok(ListResourcesResult::with_all_items(vec![
+            Resource::new("vcf://metadata", "VCF Metadata")
+                .with_description(
+                    "Metadata from the VCF file header including file format, contigs, and samples",
+                )
+                .with_mime_type("application/json"),
+        ]))
     }
 
     async fn read_resource(
         &self,
         request: ReadResourceRequestParams,
         _: RequestContext<RoleServer>,
-    ) -> Result<ReadResourceResult, McpError> {
+    ) -> Result<ReadResourceResponse, McpError> {
         if request.uri.as_str() == "vcf://metadata" {
             let index = self.index.lock().await;
             let metadata = index.get_metadata();
@@ -993,14 +981,15 @@ impl ServerHandler for VcfServer {
                 McpError::internal_error(format!("Failed to serialize metadata: {}", e), None)
             })?;
 
-            Ok(ReadResourceResult::new(vec![
-                ResourceContents::TextResourceContents {
+            Ok(
+                ReadResourceResult::new(vec![ResourceContents::TextResourceContents {
                     uri: request.uri.to_string(),
                     mime_type: Some("application/json".to_string()),
                     text: metadata_json,
                     meta: None,
-                },
-            ]))
+                }])
+                .into(),
+            )
         } else {
             Err(McpError::resource_not_found(
                 format!("Resource not found: {}", request.uri),
@@ -1014,11 +1003,7 @@ impl ServerHandler for VcfServer {
         _request: Option<PaginatedRequestParams>,
         _: RequestContext<RoleServer>,
     ) -> Result<ListResourceTemplatesResult, McpError> {
-        Ok(ListResourceTemplatesResult {
-            next_cursor: None,
-            resource_templates: Vec::new(),
-            meta: None,
-        })
+        Ok(ListResourceTemplatesResult::default())
     }
 
     async fn initialize(
@@ -1040,18 +1025,14 @@ impl ServerHandler for VcfServer {
         _request: Option<PaginatedRequestParams>,
         _: RequestContext<RoleServer>,
     ) -> Result<ListToolsResult, McpError> {
-        Ok(ListToolsResult {
-            tools: self.tool_router.list_all(),
-            next_cursor: None,
-            meta: None,
-        })
+        Ok(ListToolsResult::with_all_items(self.tool_router.list_all()))
     }
 
     async fn call_tool(
         &self,
         request: CallToolRequestParams,
         ctx: RequestContext<RoleServer>,
-    ) -> Result<CallToolResult, McpError> {
+    ) -> Result<CallToolResponse, McpError> {
         if self.debug {
             eprintln!(
                 "[DEBUG] Tool call: {}",
@@ -1131,7 +1112,7 @@ async fn run_sse_server(server: VcfServer, addr: &str) -> std::io::Result<()> {
     let config = StreamableHttpServerConfig::default()
         .with_sse_keep_alive(Some(std::time::Duration::from_secs(15)))
         .with_sse_retry(Some(std::time::Duration::from_secs(5)))
-        .with_stateful_mode(false)
+        .with_legacy_session_mode(false)
         .with_cancellation_token(tokio_util::sync::CancellationToken::new());
 
     let session_manager = Arc::new(LocalSessionManager::default());

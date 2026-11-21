@@ -1138,17 +1138,29 @@ pub fn load_vcf(path: &PathBuf, debug: bool, save_index: bool) -> std::io::Resul
         eprintln!("Loading VCF file with existing tabix index...");
         GenomicIndex::Tabix(tabix::fs::read(&tbi_path)?)
     } else {
-        // Build tabix index on the fly (fallback - CSI requires external bcftools)
-        eprintln!("No index found. Building tabix index...");
-        let index = vcf::fs::index(path)?;
-        eprintln!("Tabix index built successfully");
+        // Build index on the fly. noodles picks tabix by default, or CSI when
+        // contig lengths exceed what tabix can address.
+        eprintln!("No index found. Building index...");
+        let genomic_index = match vcf::fs::index(path)? {
+            vcf::Index::Tabix(index) => GenomicIndex::Tabix(index),
+            vcf::Index::Csi(index) => GenomicIndex::Csi(index),
+        };
+        let (kind, index_path) = match &genomic_index {
+            GenomicIndex::Tabix(_) => ("Tabix", &tbi_path),
+            GenomicIndex::Csi(_) => ("CSI", &csi_path),
+        };
+        eprintln!("{} index built successfully", kind);
 
         // Try to save index to disk if requested
         if save_index {
-            match save_tabix_index_to_disk(&index, &tbi_path, debug) {
-                Ok(()) => eprintln!("Tabix index saved to {}", tbi_path.display()),
+            let result = match &genomic_index {
+                GenomicIndex::Tabix(index) => save_tabix_index_to_disk(index, &tbi_path, debug),
+                GenomicIndex::Csi(index) => save_csi_index_to_disk(index, &csi_path, debug),
+            };
+            match result {
+                Ok(()) => eprintln!("{} index saved to {}", kind, index_path.display()),
                 Err(e) => {
-                    eprintln!("Warning: Failed to save tabix index to disk: {}", e);
+                    eprintln!("Warning: Failed to save {} index to disk: {}", kind, e);
                     eprintln!("Continuing with in-memory index...");
                 }
             }
@@ -1156,7 +1168,7 @@ pub fn load_vcf(path: &PathBuf, debug: bool, save_index: bool) -> std::io::Resul
             eprintln!("Skipping index save (--never-save-index flag set)");
         }
 
-        GenomicIndex::Tabix(index)
+        genomic_index
     };
 
     // Create reader for queries
@@ -1346,8 +1358,6 @@ fn save_tabix_index_to_disk(
 }
 
 // Helper function to atomically save CSI index to disk
-// Save CSI index to disk with atomic write (currently unused but provided for future functionality)
-#[allow(dead_code)]
 fn save_csi_index_to_disk(
     index: &csi::Index,
     csi_path: &PathBuf,
